@@ -2,9 +2,9 @@
 
 ![AutoSort](logo.png)
 
-Automatically sorts and consolidates your containers, Minecraft-style: drop everything
-into one chest, close it, and the mod tidies each container internally **and** routes
-items to the right chest across your whole storage room.
+Automatic chest sorting for Vintage Story. Drop everything into one chest, close it, and
+AutoSort tidies each container internally **and** routes every item to the right chest
+across your whole storage room.
 
 **By [Los Albatros](https://github.com/Los-Albatros) — MIT License**
 
@@ -47,13 +47,17 @@ The overlay is per-player and persists across reconnects and server restarts.
 
 ## Installation
 
-1. Download `autosort_0.1.0.zip`.
-2. Put it in your Vintage Story `Mods/` folder (server-side; client-side too if you want
-   the `/sort` overlay).
-3. Start the server. A config file `autosort.json` is generated under `ModConfig/`.
+Download `autosort_0.1.0.zip` and drop it in the Vintage Story `Mods/` folder.
 
-The sorting runs **server-side**, so it works for everyone. The `/sort` overlay is
-client-side: each player who wants it must have the mod installed on their own client.
+- **Server: required.** Installing the mod on the server enables the sorting for
+  **everyone**, including players who don't have the mod. A config file `autosort.json`
+  is generated under `ModConfig/` on first launch.
+- **Clients: optional, needed for the overlay.** The `/sort` HUD is client-side, so
+  **each player who wants it must also install the mod on their own client.** Players
+  without it still benefit from the server-side sorting — they just won't see the overlay.
+
+This is why the mod is **not** server-side only: the sorting is, but the overlay needs the
+client.
 
 ## Configuration (`ModConfig/autosort.json`)
 
