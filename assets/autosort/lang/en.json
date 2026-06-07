@@ -1,0 +1,5 @@
+{
+    "autosort:loaded": "AutoSort loaded. Radius: {0} blocks, specialisation threshold: {1}%.",
+    "autosort:overlay-enabled": "Container overlay enabled. Use /sort hide to turn it off.",
+    "autosort:overlay-hidden": "Container overlay hidden."
+}
