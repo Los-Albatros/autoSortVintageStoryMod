@@ -197,9 +197,26 @@ public static class NetworkDistributor
 
             // Expensive O(radius^3) world scan — done ONCE. Chests don't move between
             // passes, so we cache their positions and only re-read inventories each pass.
-            var roomFilter = BuildRoomFilter(origin, api, cfg);
+            var room = GetEnclosedRoom(origin, api, cfg);
+            var roomFilter = BuildRoomFilter(room);
             var containerPositions = ScanContainerPositions(origin, api, cfg, containerGroup, roomFilter);
             if (containerPositions.Count == 0) return;
+
+            // Compaction layout: pool the whole group and pack it into the chests in
+            // door-order, leaving trailing chests empty. Replaces the specialist passes.
+            if (cfg.CompactRoom)
+            {
+                try
+                {
+                    var anchor = ResolveLayoutAnchor(origin, api, room);
+                    ApplyCompactLayout(containerPositions, anchor, api, cfg);
+                }
+                catch (Exception ex)
+                {
+                    api.Logger.Warning($"[AutoSort] Compaction error at {origin}: {ex.Message}");
+                }
+                return;
+            }
 
             // Positions whose contents changed — their block entity is pushed to nearby
             // clients afterwards so the /sort overlay follows the new layout in real time
@@ -282,32 +299,161 @@ public static class NetworkDistributor
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds a predicate restricting the chest network to the origin's enclosed room
-    /// (so a closed door splits two storage rooms). Returns null — meaning "no
-    /// restriction" — when the feature is off, the room system is unavailable, or the
-    /// origin is not inside a fully enclosed room (open base / oversized space).
+    /// Returns the enclosed room containing <paramref name="origin"/>, or null when room
+    /// restriction is off, the room system is unavailable, or the origin is not inside a
+    /// fully enclosed room (open base / oversized space).
     /// </summary>
-    private static System.Func<BlockPos, bool>? BuildRoomFilter(
+    private static Vintagestory.GameContent.Room? GetEnclosedRoom(
         BlockPos origin, ICoreServerAPI api, SortConfig cfg)
     {
         if (!cfg.RestrictToSameRoom) return null;
-
         var registry = api.ModLoader.GetModSystem<Vintagestory.GameContent.RoomRegistry>();
-        if (registry == null) return null;
+        var room = registry?.GetRoomForPosition(origin);
+        if (room == null || room.ExitCount > 0) return null; // not enclosed
+        return room;
+    }
 
-        var originRoom = registry.GetRoomForPosition(origin);
-        if (originRoom == null || originRoom.ExitCount > 0) return null; // not enclosed
-
-        // Restrict to the origin room's volume. We test containment in its bounding
-        // cuboid (one room query, then cheap coordinate checks) rather than querying
-        // a room per chest — the per-block query is unreliable on solid chest blocks
-        // and across chunk borders, which previously excluded valid specialist chests.
-        // A 1-block tolerance keeps chests that sit against the room's walls.
-        var loc = originRoom.Location;
+    /// <summary>
+    /// Restricts the chest network to <paramref name="room"/>'s volume (so a closed door
+    /// splits two storage rooms). Returns null (no restriction) when room is null. Tests
+    /// containment in the bounding cuboid — one cheap check per chest — with a 1-block
+    /// tolerance so chests sitting against the room's walls still count.
+    /// </summary>
+    private static System.Func<BlockPos, bool>? BuildRoomFilter(Vintagestory.GameContent.Room? room)
+    {
+        if (room == null) return null;
+        var loc = room.Location;
         return pos =>
             pos.X >= loc.X1 - 1 && pos.X <= loc.X2 + 1 &&
             pos.Y >= loc.Y1 - 1 && pos.Y <= loc.Y2 + 1 &&
             pos.Z >= loc.Z1 - 1 && pos.Z <= loc.Z2 + 1;
+    }
+
+    /// <summary>
+    /// Reference point the compaction packs from: the room's door, else a deterministic
+    /// corner when several doors exist, else the triggering chest (open / no room).
+    /// </summary>
+    private static BlockPos ResolveLayoutAnchor(BlockPos origin, ICoreServerAPI api, Vintagestory.GameContent.Room? room)
+    {
+        if (room == null) return origin;
+
+        var loc = room.Location;
+        var doors = new List<BlockPos>();
+        var ba = api.World.BlockAccessor;
+        for (int x = loc.X1; x <= loc.X2 && doors.Count <= 2; x++)
+        for (int y = loc.Y1; y <= loc.Y2 && doors.Count <= 2; y++)
+        for (int z = loc.Z1; z <= loc.Z2 && doors.Count <= 2; z++)
+        {
+            var code = ba.GetBlock(new BlockPos(x, y, z))?.Code?.Path;
+            if (code != null && code.Contains("door", StringComparison.OrdinalIgnoreCase))
+                doors.Add(new BlockPos(x, y, z));
+        }
+
+        if (doors.Count == 1) return doors[0];                       // single door
+        if (doors.Count >= 2) return new BlockPos(loc.X1, loc.Y1, loc.Z1); // fixed corner
+        return origin;                                              // no door
+    }
+
+    /// <summary>
+    /// Pure compaction layout. Pools all items, sorts and compacts them (same keys as
+    /// the in-chest sort), then packs the result into the given chests in order, filling
+    /// each up to its slot count and leaving trailing chests empty. Duplicate stacks
+    /// scattered across chests merge naturally. Deterministic, hence idempotent.
+    /// </summary>
+    public static List<List<(string Code, int Count, int MaxStack)>> ComputeCompactLayout(
+        IReadOnlyList<(string Code, int Count, int MaxStack)> pooled,
+        IReadOnlyList<int> chestSlotCounts)
+    {
+        var sorted = InventorySorter.SortItems(pooled);
+        var result = new List<List<(string Code, int Count, int MaxStack)>>(chestSlotCounts.Count);
+
+        int idx = 0;
+        foreach (var cap in chestSlotCounts)
+        {
+            var chest = new List<(string Code, int Count, int MaxStack)>();
+            for (int i = 0; i < cap && idx < sorted.Count; i++)
+                chest.Add(sorted[idx++]);
+            result.Add(chest);
+        }
+
+        // Safety: leftover stacks (shouldn't happen, pool came from these chests) go last.
+        while (idx < sorted.Count && result.Count > 0)
+            result[^1].Add(sorted[idx++]);
+
+        return result;
+    }
+
+    /// <summary>
+    /// VS adapter for <see cref="ComputeCompactLayout"/>. Orders the chests from the
+    /// anchor (nearest first), pools every stack while clearing the slots, computes the
+    /// compact layout, and writes the items back. Pooling real (cloned) stacks prevents
+    /// duplication; trailing chests are left empty.
+    /// </summary>
+    private static void ApplyCompactLayout(List<BlockPos> positions, BlockPos anchor, ICoreServerAPI api, SortConfig cfg)
+    {
+        var ordered = positions
+            .OrderBy(p => DistSq(p, anchor))
+            .ThenBy(PosKey, StringComparer.Ordinal)
+            .ToList();
+
+        var invs = new List<IInventory>();
+        var orderedPos = new List<BlockPos>();
+        foreach (var p in ordered)
+        {
+            var inv = GetInventory(p, api, cfg);
+            if (inv == null) continue;
+            invs.Add(inv);
+            orderedPos.Add(p);
+        }
+        if (invs.Count == 0) return;
+
+        // Pool every stack (clearing slots), keeping frozen clones keyed by item code.
+        var pooled = new List<(string, int, int)>();
+        var clonePool = new Dictionary<string, Queue<ItemStack>>(StringComparer.Ordinal);
+        foreach (var inv in invs)
+        {
+            foreach (var slot in inv)
+            {
+                if (slot.Itemstack == null) continue;
+                var code = slot.Itemstack.Collectible.Code.Path;
+                pooled.Add((code, slot.Itemstack.StackSize, slot.Itemstack.Collectible.MaxStackSize));
+                var clone = slot.Itemstack.Clone();
+                if (!clonePool.TryGetValue(code, out var q))
+                    clonePool[code] = q = new Queue<ItemStack>();
+                q.Enqueue(clone);
+                slot.Itemstack = null;
+                slot.MarkDirty();
+            }
+        }
+
+        var slotCounts = invs.Select(i => i.Count).ToList();
+        var layout = ComputeCompactLayout(pooled, slotCounts);
+
+        for (int c = 0; c < invs.Count; c++)
+        {
+            var slotList = invs[c].ToList();
+            int idx = 0;
+            foreach (var (code, count, _) in layout[c])
+            {
+                if (idx >= slotList.Count) break;
+                if (!clonePool.TryGetValue(code, out var q) || q.Count == 0) continue;
+                var stack = q.Dequeue();
+                stack.StackSize = count;
+                slotList[idx].Itemstack = stack;
+                slotList[idx].MarkDirty();
+                idx++;
+            }
+        }
+
+        // Push updated contents to nearby clients (real-time overlay).
+        foreach (var p in orderedPos)
+            api.World.BlockAccessor.GetBlockEntity(p)?.MarkDirty(true);
+    }
+
+    private static long DistSq(BlockPos a, BlockPos b)
+    {
+        long dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     private record ChestGraphData(

@@ -13,6 +13,16 @@ public class SortConfig
     public bool RestrictToSameRoom { get; set; } = true;
 
     /// <summary>
+    /// When true, the whole container group in the room is laid out as one compact
+    /// block: items are pooled, sorted, and packed into the chests in order starting
+    /// from the room's door (then a fixed corner if several doors, else the triggering
+    /// chest), filling each chest fully and leaving the trailing chests empty. Duplicate
+    /// stacks across chests are merged. When false, the legacy specialist-chest
+    /// distribution is used instead.
+    /// </summary>
+    public bool CompactRoom { get; set; } = true;
+
+    /// <summary>
     /// Euclidean radius (in blocks) of each chest's neighbourhood. The network grows
     /// by cascade: every discovered chest scans its own radius, so the reachable
     /// network can extend well beyond this distance from the origin.
