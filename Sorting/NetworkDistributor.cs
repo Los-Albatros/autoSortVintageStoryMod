@@ -186,7 +186,11 @@ public static class NetworkDistributor
             var originInv = GetInventory(origin, api, cfg);
             if (originInv == null) return;
 
-            var containerGroup = cfg.GetContainerGroup(originInv.ClassName);
+            // Group by BLOCK code, not inventory ClassName: chests and storage vessels
+            // (jars) share the inventory class "chest", so only the block code
+            // (chest- vs storagevessel-) tells them apart and keeps them separate.
+            var originKind = BlockKind(origin, api);
+            var containerGroup = cfg.GetContainerGroup(originKind);
             var originKey = PosKey(origin);
 
             // Sort the triggering chest first
@@ -461,6 +465,10 @@ public static class NetworkDistributor
         return dx * dx + dy * dy + dz * dz;
     }
 
+    /// <summary>Block code path at <paramref name="pos"/> (e.g. "chest-…", "storagevessel-…").</summary>
+    private static string BlockKind(BlockPos pos, ICoreServerAPI api)
+        => api.World.BlockAccessor.GetBlock(pos)?.Code?.Path ?? "";
+
     /// <summary>
     /// True if any container in the network is currently opened by a player. Used to hold
     /// off sorting until the last open container in the room is closed.
@@ -516,8 +524,10 @@ public static class NetworkDistributor
                 var inv = GetInventory(pos, api, cfg);
                 if (inv == null) continue;
 
+                // Match the group against the block code (chest vs storagevessel),
+                // since both share the inventory class "chest".
                 if (groupFilter != null &&
-                    !groupFilter.Any(cls => inv.ClassName.Contains(cls, StringComparison.OrdinalIgnoreCase)))
+                    !groupFilter.Any(cls => BlockKind(pos, api).Contains(cls, StringComparison.OrdinalIgnoreCase)))
                     continue;
 
                 // Keep the network within the origin's enclosed room (e.g. don't sort
