@@ -189,6 +189,7 @@ public class AutoSortMod : ModSystem
         inv.OnInventoryClosed += _ =>
         {
             if (_api == null || _cfg == null) return;
+            _api.Logger.Notification($"[AutoSort] Chest closed at {pos} — scheduling sort.");
             // Defer the heavy sort+distribute to the next server tick so closing the
             // chest returns immediately (no perceived lag). World access stays on the
             // main thread via RegisterCallback.

@@ -210,7 +210,14 @@ public static class NetworkDistributor
             // another chest left open), defer: the last one to close triggers the sort.
             // The just-closed origin is excluded — at this point it may still report
             // itself as open, which would otherwise block its own sort forever.
-            if (AnyContainerOpen(containerPositions, api, cfg, origin)) return;
+            var openPos = FirstOpenContainer(containerPositions, api, cfg, origin);
+            if (openPos != null)
+            {
+                api.Logger.Notification($"[AutoSort] Sort at {origin} deferred — {openPos} still open by a player.");
+                return;
+            }
+
+            api.Logger.Notification($"[AutoSort] Sort triggered at {origin} — {containerPositions.Count} container(s), compact={cfg.CompactRoom}.");
 
             // Compaction layout: pool the whole group and pack it into the chests in
             // door-order, leaving trailing chests empty. Replaces the specialist passes.
@@ -485,15 +492,22 @@ public static class NetworkDistributor
     /// True if any container in the network is currently opened by a player. Used to hold
     /// off sorting until the last open container in the room is closed.
     /// </summary>
-    private static bool AnyContainerOpen(List<BlockPos> positions, ICoreServerAPI api, SortConfig cfg, BlockPos exclude)
+    private static BlockPos? FirstOpenContainer(List<BlockPos> positions, ICoreServerAPI api, SortConfig cfg, BlockPos exclude)
     {
+        // Only count a container as "open" if a currently-connected player has it open.
+        // Ignores stale entries (e.g. a player who disconnected with a chest open) that
+        // would otherwise block the whole room's sorting forever.
+        var online = new HashSet<string>();
+        foreach (var p in api.World.AllOnlinePlayers) online.Add(p.PlayerUID);
+
         foreach (var pos in positions)
         {
             if (pos.Equals(exclude)) continue;
-            if (GetInventory(pos, api, cfg) is InventoryBase inv && inv.openedByPlayerGUIds.Count > 0)
-                return true;
+            if (GetInventory(pos, api, cfg) is InventoryBase inv &&
+                inv.openedByPlayerGUIds.Any(uid => online.Contains(uid)))
+                return pos;
         }
-        return false;
+        return null;
     }
 
     private record ChestGraphData(
