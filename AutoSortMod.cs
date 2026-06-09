@@ -44,7 +44,10 @@ public class AutoSortMod : ModSystem
 
         _channel = api.Network
             .RegisterChannel("autosort")
-            .RegisterMessageType<OverlayPacket>();
+            .RegisterMessageType<OverlayPacket>()
+            .RegisterMessageType<ConfigSyncPacket>()
+            .RegisterMessageType<ConfigChangePacket>()
+            .SetMessageHandler<ConfigChangePacket>(OnConfigChange);
 
         api.ChatCommands
             .Create("autosort")
@@ -114,6 +117,63 @@ public class AutoSortMod : ModSystem
         // Sort the player's backpack content when they close their inventory.
         if (_cfg?.Data.SortPlayerBackpack == true)
             HookBackpack(player);
+
+        // Push the config snapshot so the ConfigLib screen can render it.
+        _api?.Event.RegisterCallback(_ => SendConfigSync(player), 500);
+    }
+
+    private void SendConfigSync(IServerPlayer player)
+    {
+        if (_api == null || _cfg == null || _channel == null) return;
+        var c = _cfg.Data;
+        _channel.SendPacket(new ConfigSyncPacket
+        {
+            IsAdmin = player.HasPrivilege(Privilege.controlserver),
+            OverlayEnabled = _overlayByPlayer.GetValueOrDefault(player.PlayerUID),
+            Enabled = c.Enabled,
+            CompactRoom = c.CompactRoom,
+            SeparateFloors = c.SeparateFloors,
+            RestrictToSameRoom = c.RestrictToSameRoom,
+            SortPlayerBackpack = c.SortPlayerBackpack,
+            SearchRadiusBlocks = c.SearchRadiusBlocks,
+            MaxNetworkChests = c.MaxNetworkChests,
+            MaxVerticalSpan = c.MaxVerticalSpan,
+            SpecialisationThreshold = c.SpecialisationThreshold,
+            EnabledKinds = c.SupportedInventoryClasses.ToArray(),
+            DiscoveredKinds = ContainerDiscovery.Discover(_api),
+        }, player);
+    }
+
+    private void OnConfigChange(IServerPlayer player, ConfigChangePacket p)
+    {
+        if (_api == null || _cfg == null) return;
+
+        // The overlay toggle always applies to the requesting player.
+        _overlayByPlayer[player.PlayerUID] = p.OverlayEnabled;
+        player.WorldData.SetModdata(OverlayPrefKey, new[] { (byte)(p.OverlayEnabled ? 1 : 0) });
+        _channel?.SendPacket(new OverlayPacket { Enabled = p.OverlayEnabled }, player);
+
+        // Configuration changes require the controlserver privilege.
+        if (p.ApplyConfig && player.HasPrivilege(Privilege.controlserver))
+        {
+            var c = _cfg.Data;
+            c.Enabled = p.Enabled;
+            c.CompactRoom = p.CompactRoom;
+            c.SeparateFloors = p.SeparateFloors;
+            c.RestrictToSameRoom = p.RestrictToSameRoom;
+            c.SortPlayerBackpack = p.SortPlayerBackpack;
+            c.SearchRadiusBlocks = System.Math.Max(1, p.SearchRadiusBlocks);
+            c.MaxNetworkChests = System.Math.Max(1, p.MaxNetworkChests);
+            c.MaxVerticalSpan = System.Math.Max(0, p.MaxVerticalSpan);
+            c.SpecialisationThreshold = System.Math.Clamp(p.SpecialisationThreshold, 0.1, 1.0);
+            if (p.EnabledKinds is { Length: > 0 })
+                c.SupportedInventoryClasses = p.EnabledKinds
+                    .Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
+            _cfg.Save();
+            _api.Logger.Notification($"[AutoSort] Config updated by {player.PlayerName}.");
+        }
+
+        SendConfigSync(player);
     }
 
     /// <summary>

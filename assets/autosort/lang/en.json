@@ -1,5 +1,22 @@
 {
     "autosort:loaded": "AutoSort loaded. Radius: {0} blocks, specialisation threshold: {1}%.",
     "autosort:overlay-enabled": "Container overlay enabled. Use /sort hide to turn it off.",
-    "autosort:overlay-hidden": "Container overlay hidden."
+    "autosort:overlay-hidden": "Container overlay hidden.",
+
+    "autosort:cfg-waiting": "Waiting for server config…",
+    "autosort:cfg-player-section": "Player",
+    "autosort:cfg-overlay": "Container overlay (/sort)",
+    "autosort:cfg-admin-section": "Sorting (admin)",
+    "autosort:cfg-admin-readonly": "Managed by the server admin (read-only).",
+    "autosort:cfg-enabled": "Sorting enabled",
+    "autosort:cfg-compact": "Compact rooms",
+    "autosort:cfg-separatefloors": "Separate floors",
+    "autosort:cfg-room": "Restrict to the same room",
+    "autosort:cfg-backpack": "Sort player backpack",
+    "autosort:cfg-radius": "Search radius (blocks)",
+    "autosort:cfg-maxchests": "Max chests per network",
+    "autosort:cfg-vspan": "Max vertical span (0 = off)",
+    "autosort:cfg-threshold": "Specialisation threshold",
+    "autosort:cfg-containers": "Sorted container types",
+    "autosort:cfg-add": "Add"
 }

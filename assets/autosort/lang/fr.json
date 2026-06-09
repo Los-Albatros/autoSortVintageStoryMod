@@ -1,0 +1,22 @@
+{
+    "autosort:loaded": "AutoSort chargé. Rayon : {0} blocs, seuil de spécialisation : {1}%.",
+    "autosort:overlay-enabled": "Aperçu des conteneurs activé. /sort hide pour le désactiver.",
+    "autosort:overlay-hidden": "Aperçu des conteneurs masqué.",
+
+    "autosort:cfg-waiting": "En attente de la config du serveur…",
+    "autosort:cfg-player-section": "Joueur",
+    "autosort:cfg-overlay": "Aperçu des conteneurs (/sort)",
+    "autosort:cfg-admin-section": "Tri (admin)",
+    "autosort:cfg-admin-readonly": "Géré par l'administrateur du serveur (lecture seule).",
+    "autosort:cfg-enabled": "Tri activé",
+    "autosort:cfg-compact": "Compacter les salles",
+    "autosort:cfg-separatefloors": "Séparer les étages",
+    "autosort:cfg-room": "Restreindre à la même pièce",
+    "autosort:cfg-backpack": "Trier le sac du joueur",
+    "autosort:cfg-radius": "Rayon de recherche (blocs)",
+    "autosort:cfg-maxchests": "Coffres max par réseau",
+    "autosort:cfg-vspan": "Écart vertical max (0 = off)",
+    "autosort:cfg-threshold": "Seuil de spécialisation",
+    "autosort:cfg-containers": "Types de conteneurs triés",
+    "autosort:cfg-add": "Ajouter"
+}
