@@ -548,6 +548,12 @@ public static class NetworkDistributor
                 var key = PosKey(pos);
                 if (found.ContainsKey(key)) continue;
 
+                // Keep the network on the triggering chest's floor: a ladder or open
+                // stairwell can make the room span several storeys, but we don't want to
+                // sort across floors.
+                if (cfg.MaxVerticalSpan > 0 && Math.Abs(pos.Y - origin.Y) > cfg.MaxVerticalSpan)
+                    continue;
+
                 var inv = GetInventory(pos, api, cfg);
                 if (inv == null) continue;
 

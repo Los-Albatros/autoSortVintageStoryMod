@@ -42,6 +42,14 @@ public class SortConfig
     public int MaxNetworkChests { get; set; } = 256;
 
     /// <summary>
+    /// Maximum vertical distance (in blocks) a chest may be from the triggering chest to
+    /// join its network. Keeps sorting on the current floor even when a ladder or open
+    /// stairwell makes the room system see several storeys as one room. Set to 0 to
+    /// disable the vertical limit.
+    /// </summary>
+    public int MaxVerticalSpan { get; set; } = 3;
+
+    /// <summary>
     /// Fraction of non-empty slots that must share a SemanticType for a chest
     /// to be considered specialised in that type (0.0–1.0).
     /// </summary>
