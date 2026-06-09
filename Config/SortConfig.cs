@@ -42,12 +42,18 @@ public class SortConfig
     public int MaxNetworkChests { get; set; } = 256;
 
     /// <summary>
-    /// Maximum vertical distance (in blocks) a chest may be from the triggering chest to
-    /// join its network. Keeps sorting on the current floor even when a ladder or open
-    /// stairwell makes the room system see several storeys as one room. Set to 0 to
-    /// disable the vertical limit.
+    /// When true, two chests separated by a solid block layer (a floor / ceiling) are
+    /// treated as being on different storeys and are not sorted together — even when a
+    /// ladder or open stairwell makes the room system see them as one room. Works at any
+    /// ceiling height, no tuning needed.
     /// </summary>
-    public int MaxVerticalSpan { get; set; } = 3;
+    public bool SeparateFloors { get; set; } = true;
+
+    /// <summary>
+    /// Optional hard cap on the vertical distance (in blocks) a chest may be from the
+    /// triggering chest to join its network. 0 = no cap (rely on <see cref="SeparateFloors"/>).
+    /// </summary>
+    public int MaxVerticalSpan { get; set; } = 0;
 
     /// <summary>
     /// Fraction of non-empty slots that must share a SemanticType for a chest

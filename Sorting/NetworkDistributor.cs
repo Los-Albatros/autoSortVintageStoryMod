@@ -489,6 +489,30 @@ public static class NetworkDistributor
         => api.World.BlockAccessor.GetBlock(pos)?.Code?.Path ?? "";
 
     /// <summary>
+    /// True if <paramref name="pos"/> is on the same storey as <paramref name="origin"/>:
+    /// no solid floor/ceiling layer lies between their Y levels (checked in the
+    /// candidate's own column), and the optional vertical cap isn't exceeded.
+    /// </summary>
+    private static bool SameStorey(BlockPos origin, BlockPos pos, ICoreServerAPI api, SortConfig cfg)
+    {
+        if (cfg.MaxVerticalSpan > 0 && Math.Abs(pos.Y - origin.Y) > cfg.MaxVerticalSpan)
+            return false;
+        if (!cfg.SeparateFloors || pos.Y == origin.Y)
+            return true;
+
+        int lo = Math.Min(origin.Y, pos.Y);
+        int hi = Math.Max(origin.Y, pos.Y);
+        var ba = api.World.BlockAccessor;
+        for (int y = lo + 1; y < hi; y++)
+        {
+            var b = ba.GetBlock(new BlockPos(pos.X, y, pos.Z));
+            if (b != null && b.Id != 0 && b.SideSolid[BlockFacing.UP.Index])
+                return false; // a solid floor/ceiling separates the two storeys
+        }
+        return true;
+    }
+
+    /// <summary>
     /// True if any container in the network is currently opened by a player. Used to hold
     /// off sorting until the last open container in the room is closed.
     /// </summary>
@@ -549,10 +573,9 @@ public static class NetworkDistributor
                 if (found.ContainsKey(key)) continue;
 
                 // Keep the network on the triggering chest's floor: a ladder or open
-                // stairwell can make the room span several storeys, but we don't want to
-                // sort across floors.
-                if (cfg.MaxVerticalSpan > 0 && Math.Abs(pos.Y - origin.Y) > cfg.MaxVerticalSpan)
-                    continue;
+                // stairwell can make the room span several storeys, but we don't sort
+                // across a solid floor/ceiling layer.
+                if (!SameStorey(origin, pos, api, cfg)) continue;
 
                 var inv = GetInventory(pos, api, cfg);
                 if (inv == null) continue;
