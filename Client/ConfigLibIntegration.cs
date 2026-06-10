@@ -15,7 +15,7 @@ namespace autoSortVintageStoryMod.Client;
 public static class ConfigLibIntegration
 {
     // Local editable state (mirrors the last server snapshot).
-    private static bool _overlay, _enabled, _compact, _separateFloors, _restrictRoom, _sortBackpack;
+    private static bool _overlay, _enabled, _compact, _separateFloors, _sortBackpack;
     private static int _radius, _maxChests, _maxVSpan, _selectedDiscovered;
     private static float _threshold;
     private static System.Collections.Generic.List<string> _enabledKinds = new();
@@ -48,7 +48,7 @@ public static class ConfigLibIntegration
     private static void Sync(ConfigSyncPacket cfg)
     {
         string hash = $"{cfg.IsAdmin}|{cfg.OverlayEnabled}|{cfg.Enabled}|{cfg.CompactRoom}|{cfg.SeparateFloors}|" +
-                      $"{cfg.RestrictToSameRoom}|{cfg.SortPlayerBackpack}|{cfg.SearchRadiusBlocks}|{cfg.MaxNetworkChests}|" +
+                      $"{cfg.SortPlayerBackpack}|{cfg.SearchRadiusBlocks}|{cfg.MaxNetworkChests}|" +
                       $"{cfg.MaxVerticalSpan}|{cfg.SpecialisationThreshold}|{string.Join(',', cfg.EnabledKinds)}";
         if (hash == _lastHash) return;
         _lastHash = hash;
@@ -57,7 +57,6 @@ public static class ConfigLibIntegration
         _enabled = cfg.Enabled;
         _compact = cfg.CompactRoom;
         _separateFloors = cfg.SeparateFloors;
-        _restrictRoom = cfg.RestrictToSameRoom;
         _sortBackpack = cfg.SortPlayerBackpack;
         _radius = cfg.SearchRadiusBlocks;
         _maxChests = cfg.MaxNetworkChests;
@@ -85,7 +84,6 @@ public static class ConfigLibIntegration
         ImGui.Checkbox(Lang.Get("autosort:cfg-enabled") + $"##{id}en", ref _enabled);
         ImGui.Checkbox(Lang.Get("autosort:cfg-compact") + $"##{id}co", ref _compact);
         ImGui.Checkbox(Lang.Get("autosort:cfg-separatefloors") + $"##{id}sf", ref _separateFloors);
-        ImGui.Checkbox(Lang.Get("autosort:cfg-room") + $"##{id}rm", ref _restrictRoom);
         ImGui.Checkbox(Lang.Get("autosort:cfg-backpack") + $"##{id}bp", ref _sortBackpack);
         ImGui.Spacing();
 
@@ -147,7 +145,6 @@ public static class ConfigLibIntegration
                 Enabled = _enabled,
                 CompactRoom = _compact,
                 SeparateFloors = _separateFloors,
-                RestrictToSameRoom = _restrictRoom,
                 SortPlayerBackpack = _sortBackpack,
                 SearchRadiusBlocks = _radius,
                 MaxNetworkChests = _maxChests,

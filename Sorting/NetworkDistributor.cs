@@ -190,122 +190,36 @@ public static class NetworkDistributor
             // (jars) share the inventory class "chest", so only the block code
             // (chest- vs storagevessel-) tells them apart and keeps them separate.
             var originKind = BlockKind(origin, api);
+
+            // Never act on an excluded container (collapsed/ruined trunk, or any
+            // retrieve-only loot container the player can't place items into).
+            if (IsExcludedContainer(origin, api, cfg)) return;
+
             var containerGroup = cfg.GetContainerGroup(originKind);
-            var originKey = PosKey(origin);
 
             // Sort the triggering chest first
             try { InventorySorter.Sort(originInv); }
             catch (Exception ex) { api.Logger.Warning($"[AutoSort] Sort error at {origin}: {ex.Message}"); }
 
-            int totalMoved = 0;
-
-            // Expensive O(radius^3) world scan — done ONCE. Chests don't move between
-            // passes, so we cache their positions and only re-read inventories each pass.
-            var room = GetEnclosedRoom(origin, api, cfg);
-            var roomFilter = BuildRoomFilter(room);
-            var containerPositions = ScanContainerPositions(origin, api, cfg, containerGroup, roomFilter);
-            if (containerPositions.Count == 0) return;
+            // Flood the room's open space to find the same-group containers it contains.
+            // Walls/doors/stairs bound the flood, so the network is exactly the room and
+            // never leaks into the next one. An open/huge area returns just the origin.
+            var containerPositions = ScanContainerPositions(origin, api, cfg, containerGroup);
+            if (containerPositions.Count <= 1) return; // alone → already sorted internally
 
             // If any OTHER container in the network is still open (another player, or
             // another chest left open), defer: the last one to close triggers the sort.
             // The just-closed origin is excluded — at this point it may still report
             // itself as open, which would otherwise block its own sort forever.
-            var openPos = FirstOpenContainer(containerPositions, api, cfg, origin);
-            if (openPos != null)
-            {
-                api.Logger.Notification($"[AutoSort] Sort at {origin} deferred — {openPos} still open by a player.");
-                return;
-            }
+            if (FirstOpenContainer(containerPositions, api, cfg, origin) != null) return;
 
-            api.Logger.Notification($"[AutoSort] Sort triggered at {origin} — {containerPositions.Count} container(s), compact={cfg.CompactRoom}.");
-
-            // Compaction layout: pool the whole group and pack it into the chests in
-            // door-order, leaving trailing chests empty. Replaces the specialist passes.
-            if (cfg.CompactRoom)
-            {
-                try
-                {
-                    var anchor = ResolveLayoutAnchor(containerPositions, api, room);
-                    ApplyCompactLayout(containerPositions, anchor, api, cfg);
-                }
-                catch (Exception ex)
-                {
-                    api.Logger.Warning($"[AutoSort] Compaction error at {origin}: {ex.Message}");
-                }
-                return;
-            }
-
-            // Positions whose contents changed — their block entity is pushed to nearby
-            // clients afterwards so the /sort overlay follows the new layout in real time
-            // even for chests the player never opened. Origin is always (re)sorted.
-            var changed = new HashSet<string> { originKey };
-
-            for (int pass = 0; pass < cfg.MaxCascadeIterations; pass++)
-            {
-                // Cheap snapshot: re-read only the known container inventories
-                var global = BuildGraphFromPositions(containerPositions, api, cfg);
-                if (global.Data.Count == 0) break;
-
-                // Single ComputeDistribution call — visits all chests in the flat-adjacency
-                // graph (depth-1 = entire network) and plans all transfers at once.
-                var result = ComputeDistribution(
-                    origin: originKey,
-                    chests: global.Data,
-                    neighboursOf: id => global.Neighbours.GetValueOrDefault(id, []),
-                    maxDepth: 1,
-                    threshold: cfg.SpecialisationThreshold);
-
-                int movedThisPass = 0;
-                var dirtied = new HashSet<string>();
-
-                foreach (var plan in result.Transfers)
-                {
-                    if (!global.PosLookup.TryGetValue(plan.SourceId, out var srcPos)) continue;
-                    if (!global.PosLookup.TryGetValue(plan.TargetId, out var tgtPos)) continue;
-
-                    var srcInv = GetInventory(srcPos, api, cfg);
-                    var tgtInv = GetInventory(tgtPos, api, cfg);
-                    if (srcInv == null || tgtInv == null) continue;
-
-                    var moved = ApplyTransfer(plan, srcInv, tgtInv);
-                    if (moved > 0)
-                    {
-                        movedThisPass += moved;
-                        dirtied.Add(plan.SourceId);
-                        dirtied.Add(plan.TargetId);
-                    }
-                }
-
-                // Sort every chest that changed
-                foreach (var id in dirtied)
-                {
-                    if (!global.PosLookup.TryGetValue(id, out var pos)) continue;
-                    var inv = GetInventory(pos, api, cfg);
-                    if (inv == null) continue;
-                    try { InventorySorter.Sort(inv); }
-                    catch (Exception ex) { api.Logger.Warning($"[AutoSort] Sort error at {pos}: {ex.Message}"); }
-                }
-
-                // Overflow: items that couldn't reach a specialist go to adjacent chests
-                foreach (var id in global.Data.Keys)
-                {
-                    if (!global.PosLookup.TryGetValue(id, out var pos)) continue;
-                    TryOverflowToAdjacent(pos, api, cfg, containerGroup ?? cfg.SupportedInventoryClasses);
-                }
-
-                changed.UnionWith(dirtied);
-                totalMoved += movedThisPass;
-                if (movedThisPass == 0) break; // stable — nothing moved this pass
-            }
-
-            // Push updated contents to nearby clients (real-time overlay).
-            foreach (var id in changed)
-            {
-                var pos = ParsePos(id);
-                api.World.BlockAccessor.GetBlockEntity(pos)?.MarkDirty(true);
-            }
-
-            api.Logger.VerboseDebug($"[AutoSort] Distribution complete from {origin}: {totalMoved} item(s) moved.");
+            // Lay out the whole group as one unit, anchored to the lowest container (a
+            // stable reference, same whichever chest you close). Default ("valence")
+            // spreads each item kind across its own chest; CompactRoom packs densely.
+            // Both leave no empty chest between filled ones and are deterministic.
+            var anchor = ResolveLayoutAnchor(containerPositions);
+            try { ApplyLayout(containerPositions, anchor, api, cfg); }
+            catch (Exception ex) { api.Logger.Warning($"[AutoSort] Layout error at {origin}: {ex.Message}"); }
         }
         catch (Exception ex)
         {
@@ -316,71 +230,12 @@ public static class NetworkDistributor
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Returns the enclosed room containing <paramref name="origin"/>, or null when room
-    /// restriction is off, the room system is unavailable, or the origin is not inside a
-    /// fully enclosed room (open base / oversized space).
+    /// Stable, trigger-independent reference the layout packs from: the lexicographically
+    /// smallest container in the network, so the result is identical whichever chest was
+    /// just closed.
     /// </summary>
-    private static Vintagestory.GameContent.Room? GetEnclosedRoom(
-        BlockPos origin, ICoreServerAPI api, SortConfig cfg)
-    {
-        if (!cfg.RestrictToSameRoom) return null;
-        var registry = api.ModLoader.GetModSystem<Vintagestory.GameContent.RoomRegistry>();
-        var room = registry?.GetRoomForPosition(origin);
-        if (room == null || room.ExitCount > 0) return null; // not enclosed
-        return room;
-    }
-
-    /// <summary>
-    /// Restricts the chest network to <paramref name="room"/>'s volume (so a closed door
-    /// splits two storage rooms). Returns null (no restriction) when room is null. Tests
-    /// containment in the bounding cuboid — one cheap check per chest — with a 1-block
-    /// tolerance so chests sitting against the room's walls still count.
-    /// </summary>
-    private static System.Func<BlockPos, bool>? BuildRoomFilter(Vintagestory.GameContent.Room? room)
-    {
-        if (room == null) return null;
-        var loc = room.Location;
-        return pos =>
-            pos.X >= loc.X1 - 1 && pos.X <= loc.X2 + 1 &&
-            pos.Y >= loc.Y1 - 1 && pos.Y <= loc.Y2 + 1 &&
-            pos.Z >= loc.Z1 - 1 && pos.Z <= loc.Z2 + 1;
-    }
-
-    /// <summary>
-    /// Stable, trigger-independent reference the compaction packs from, so the layout is
-    /// the same whichever chest was just closed:
-    /// • room with door(s) → the lexicographically smallest door ("first door"),
-    ///   deterministic even with several doors;
-    /// • otherwise → the lexicographically smallest container in the network (a fixed
-    ///   "start of the room"), independent of the triggering chest.
-    /// </summary>
-    private static BlockPos ResolveLayoutAnchor(
-        List<BlockPos> positions, ICoreServerAPI api, Vintagestory.GameContent.Room? room)
-    {
-        if (room != null)
-        {
-            BlockPos? minDoor = null;
-            var loc = room.Location;
-            var ba = api.World.BlockAccessor;
-            for (int x = loc.X1; x <= loc.X2; x++)
-            for (int y = loc.Y1; y <= loc.Y2; y++)
-            for (int z = loc.Z1; z <= loc.Z2; z++)
-            {
-                var code = ba.GetBlock(new BlockPos(x, y, z))?.Code?.Path;
-                if (code == null || !code.Contains("door", StringComparison.OrdinalIgnoreCase)) continue;
-                var p = new BlockPos(x, y, z);
-                if (minDoor == null || Less(p, minDoor)) minDoor = p;
-            }
-            if (minDoor != null) return minDoor;
-        }
-
-        return positions
-            .OrderBy(p => p.X).ThenBy(p => p.Y).ThenBy(p => p.Z)
-            .First();
-    }
-
-    private static bool Less(BlockPos a, BlockPos b)
-        => a.X != b.X ? a.X < b.X : a.Y != b.Y ? a.Y < b.Y : a.Z < b.Z;
+    private static BlockPos ResolveLayoutAnchor(List<BlockPos> positions)
+        => positions.OrderBy(p => p.X).ThenBy(p => p.Y).ThenBy(p => p.Z).First();
 
     /// <summary>
     /// Pure compaction layout. Pools all items, sorts and compacts them (same keys as
@@ -412,12 +267,61 @@ public static class NetworkDistributor
     }
 
     /// <summary>
-    /// VS adapter for <see cref="ComputeCompactLayout"/>. Orders the chests from the
-    /// anchor (nearest first), pools every stack while clearing the slots, computes the
-    /// compact layout, and writes the items back. Pooling real (cloned) stacks prevents
-    /// duplication; trailing chests are left empty.
+    /// Pure "valence" layout. Each distinct item (full code) is a resource that ideally
+    /// gets its own chest, spreading across as many chests as the room offers. When there
+    /// are more distinct items than chests, chests take 2, then 3… resources (balanced),
+    /// like filling electron shells. Chests fill in anchor order with no empty chest
+    /// between filled ones; a resource too big for one chest overflows into the next.
+    /// Deterministic, hence idempotent.
     /// </summary>
-    private static void ApplyCompactLayout(List<BlockPos> positions, BlockPos anchor, ICoreServerAPI api, SortConfig cfg)
+    public static List<List<(string Code, int Count, int MaxStack)>> ComputeValenceLayout(
+        IReadOnlyList<(string Code, int Count, int MaxStack)> pooled,
+        IReadOnlyList<int> chestSlotCounts)
+    {
+        var sorted = InventorySorter.SortItems(pooled);
+        int n = chestSlotCounts.Count;
+        var result = new List<List<(string Code, int Count, int MaxStack)>>(n);
+        for (int i = 0; i < n; i++) result.Add(new());
+        if (n == 0 || sorted.Count == 0) return result;
+
+        // Group the sorted stacks into resources: one resource per distinct item code.
+        var resources = new List<List<(string Code, int Count, int MaxStack)>>();
+        string? curCode = null;
+        foreach (var stack in sorted)
+        {
+            if (curCode == null || stack.Code != curCode) { resources.Add(new()); curCode = stack.Code; }
+            resources[^1].Add(stack);
+        }
+
+        // Distribute the distinct items evenly across the chests so EVERY chest gets one
+        // before any gets a second (electron-shell / Hund's rule). Each chest receives
+        // floor(R/N) items, and the first (R mod N) chests one extra. Because the items
+        // are sorted, a chest that holds several gets same-family items grouped together.
+        int r = resources.Count;
+        int baseCount = r / n, remainder = r % n;
+        int chest = 0, resInChest = 0;
+        foreach (var resource in resources)
+        {
+            foreach (var stack in resource)
+            {
+                while (chest < n - 1 && result[chest].Count >= chestSlotCounts[chest]) { chest++; resInChest = 0; }
+                result[chest].Add(stack);
+            }
+            resInChest++;
+            int quota = baseCount + (chest < remainder ? 1 : 0);
+            if (resInChest >= quota && chest < n - 1) { chest++; resInChest = 0; }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Pools every container in the network (clearing them), computes the target layout —
+    /// dense compaction or the spread "valence" layout depending on
+    /// <see cref="SortConfig.CompactRoom"/> — and writes the items back, chests ordered
+    /// from the anchor. Pooling real (cloned) stacks prevents duplication.
+    /// </summary>
+    private static void ApplyLayout(List<BlockPos> positions, BlockPos anchor, ICoreServerAPI api, SortConfig cfg)
     {
         var ordered = positions
             .OrderBy(p => DistSq(p, anchor))
@@ -455,7 +359,9 @@ public static class NetworkDistributor
         }
 
         var slotCounts = invs.Select(i => i.Count).ToList();
-        var layout = ComputeCompactLayout(pooled, slotCounts);
+        var layout = cfg.CompactRoom
+            ? ComputeCompactLayout(pooled, slotCounts)
+            : ComputeValenceLayout(pooled, slotCounts);
 
         for (int c = 0; c < invs.Count; c++)
         {
@@ -487,6 +393,37 @@ public static class NetworkDistributor
     /// <summary>Block code path at <paramref name="pos"/> (e.g. "chest-…", "storagevessel-…").</summary>
     private static string BlockKind(BlockPos pos, ICoreServerAPI api)
         => api.World.BlockAccessor.GetBlock(pos)?.Code?.Path ?? "";
+
+    /// <summary>
+    /// True if a container must be left untouched: its block code matches one of
+    /// <see cref="SortConfig.IgnoredContainerCodes"/>, or the block is retrieve-only
+    /// (a read-only loot container the player can't place items into).
+    /// </summary>
+    private static bool IsExcludedContainer(BlockPos pos, ICoreServerAPI api, SortConfig cfg)
+    {
+        var block = api.World.BlockAccessor.GetBlock(pos);
+        if (block?.Code == null) return false;
+
+        var path = block.Code.Path;
+        if (cfg.IgnoredContainerCodes.Any(ig => path.Contains(ig, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        try
+        {
+            var ro = block.Attributes?["retrieveOnly"];
+            if (ro != null && ro.Exists)
+            {
+                if (ro.AsBool(false)) return true;
+                var s = ro.AsString(null);
+                if (s != null && (s.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                                  s.Equals("true", StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+        }
+        catch { /* attribute shape varies across mods — ignore on error */ }
+
+        return false;
+    }
 
     /// <summary>
     /// True if <paramref name="pos"/> is on the same storey as <paramref name="origin"/>:
@@ -539,21 +476,89 @@ public static class NetworkDistributor
         Dictionary<string, List<string>> Neighbours,
         Dictionary<string, BlockPos> PosLookup);
 
+    private static readonly Vec3i[] Offsets6 =
+    {
+        new(1, 0, 0), new(-1, 0, 0), new(0, 1, 0), new(0, -1, 0), new(0, 0, 1), new(0, 0, -1),
+    };
+
     /// <summary>
-    /// Discovers the connected chest network by cascade flood-fill: starting from
-    /// <paramref name="origin"/>, every discovered chest scans its own
-    /// <see cref="SortConfig.SearchRadiusBlocks"/> sphere, pulling in further chests
-    /// until the network stops growing or <see cref="SortConfig.MaxNetworkChests"/>
-    /// is reached. Each chest is scanned exactly once. Result is cached across passes.
+    /// Discovers the room's container network. First tries flooding the OPEN SPACE around
+    /// the chest (stops at walls/doors/stairs → clean per-room separation, a fridge behind
+    /// its door stays separate). If the space doesn't close off within
+    /// <see cref="SortConfig.MaxRoomCells"/> (an open or not-fully-sealed area), it falls
+    /// back to the radius cascade so large/open halls still get full coverage.
     /// </summary>
     private static List<BlockPos> ScanContainerPositions(
         BlockPos origin, ICoreServerAPI api, SortConfig cfg,
-        IReadOnlyList<string>? groupFilter = null,
-        System.Func<BlockPos, bool>? roomFilter = null)
+        IReadOnlyList<string>? groupFilter = null)
     {
-        var radius = cfg.SearchRadiusBlocks;
-        var r2 = radius * radius;
-        var cap = cfg.MaxNetworkChests;
+        var byAir = FloodByAir(origin, api, cfg, groupFilter, out bool enclosed);
+        if (enclosed && byAir.Count > 1) return byAir;     // sealed room → clean separation
+        return FloodByRadius(origin, api, cfg, groupFilter); // open/large → full coverage
+    }
+
+    private static List<BlockPos> FloodByAir(
+        BlockPos origin, ICoreServerAPI api, SortConfig cfg,
+        IReadOnlyList<string>? groupFilter, out bool enclosed)
+    {
+        var ba = api.World.BlockAccessor;
+        int chestCap = cfg.MaxNetworkChests;
+        int cellCap = cfg.MaxRoomCells;
+
+        var found = new Dictionary<string, BlockPos> { [PosKey(origin)] = origin };
+        var airSeen = new HashSet<string>();
+        var queue = new Queue<BlockPos>();
+
+        foreach (var o in Offsets6)
+        {
+            var p = origin.AddCopy(o.X, o.Y, o.Z);
+            if (IsPassable(ba.GetBlock(p)) && airSeen.Add(PosKey(p))) queue.Enqueue(p);
+        }
+
+        bool capped = false;
+        while (queue.Count > 0 && found.Count < chestCap)
+        {
+            if (airSeen.Count >= cellCap) { capped = true; break; }
+            var cell = queue.Dequeue();
+
+            foreach (var o in Offsets6)
+            {
+                var nb = cell.AddCopy(o.X, o.Y, o.Z);
+                var key = PosKey(nb);
+                if (airSeen.Contains(key) || found.ContainsKey(key)) continue;
+
+                if (GetInventory(nb, api, cfg) != null)
+                {
+                    // No storey check needed here: a solid floor/ceiling is impassable, so
+                    // the air flood already can't cross between storeys. Whichever chest
+                    // triggers, the same connected air → the same set of containers.
+                    if (!IsExcludedContainer(nb, api, cfg) &&
+                        (groupFilter == null ||
+                         groupFilter.Any(cls => BlockKind(nb, api).Contains(cls, StringComparison.OrdinalIgnoreCase))))
+                        found[key] = nb;
+                    continue;
+                }
+
+                if (IsPassable(ba.GetBlock(nb)) && airSeen.Add(key))
+                    queue.Enqueue(nb);
+            }
+        }
+
+        enclosed = !capped;
+        return found.Values.ToList();
+    }
+
+    /// <summary>
+    /// Radius cascade flood-fill: every found chest scans its own
+    /// <see cref="SortConfig.SearchRadiusBlocks"/> sphere. Full coverage of connected
+    /// chests regardless of walls — used when the air flood can't seal a room.
+    /// </summary>
+    private static List<BlockPos> FloodByRadius(
+        BlockPos origin, ICoreServerAPI api, SortConfig cfg, IReadOnlyList<string>? groupFilter)
+    {
+        int radius = cfg.SearchRadiusBlocks;
+        int r2 = radius * radius;
+        int cap = cfg.MaxNetworkChests;
 
         var found = new Dictionary<string, BlockPos> { [PosKey(origin)] = origin };
         var queue = new Queue<BlockPos>();
@@ -562,7 +567,6 @@ public static class NetworkDistributor
         while (queue.Count > 0 && found.Count < cap)
         {
             var center = queue.Dequeue();
-
             for (int dx = -radius; dx <= radius; dx++)
             for (int dy = -radius; dy <= radius; dy++)
             for (int dz = -radius; dz <= radius; dz++)
@@ -571,32 +575,41 @@ public static class NetworkDistributor
                 var pos = center.AddCopy(dx, dy, dz);
                 var key = PosKey(pos);
                 if (found.ContainsKey(key)) continue;
-
-                // Keep the network on the triggering chest's floor: a ladder or open
-                // stairwell can make the room span several storeys, but we don't sort
-                // across a solid floor/ceiling layer.
-                if (!SameStorey(origin, pos, api, cfg)) continue;
-
-                var inv = GetInventory(pos, api, cfg);
-                if (inv == null) continue;
-
-                // Match the group against the block code (chest vs storagevessel),
-                // since both share the inventory class "chest".
+                // Pairwise storey check (center↔candidate, not vs the origin) so the
+                // connected component is the same whichever chest triggered the sort.
+                if (!SameStorey(center, pos, api, cfg)) continue;
+                if (GetInventory(pos, api, cfg) == null) continue;
+                if (IsExcludedContainer(pos, api, cfg)) continue;
                 if (groupFilter != null &&
                     !groupFilter.Any(cls => BlockKind(pos, api).Contains(cls, StringComparison.OrdinalIgnoreCase)))
                     continue;
 
-                // Keep the network within the origin's enclosed room (e.g. don't sort
-                // across a closed door) when that restriction is enabled.
-                if (roomFilter != null && !roomFilter(pos)) continue;
-
                 found[key] = pos;
-                queue.Enqueue(pos); // cascade: this chest scans its own neighbourhood
+                queue.Enqueue(pos);
                 if (found.Count >= cap) break;
             }
         }
 
         return found.Values.ToList();
+    }
+
+    /// <summary>
+    /// Whether the room flood may pass through this block. Air and non-solid decoration
+    /// are passable; walls (solid blocks) and explicit boundaries (doors, stairs, gates,
+    /// trapdoors, ladders) are not — they delimit rooms and storeys.
+    /// </summary>
+    private static bool IsPassable(Block? b)
+    {
+        if (b == null || b.Id == 0) return true;
+        var code = b.Code?.Path;
+        if (code != null && (
+                code.Contains("door", StringComparison.OrdinalIgnoreCase) ||
+                code.Contains("stairs", StringComparison.OrdinalIgnoreCase) ||
+                code.Contains("gate", StringComparison.OrdinalIgnoreCase) ||
+                code.Contains("trapdoor", StringComparison.OrdinalIgnoreCase) ||
+                code.Contains("ladder", StringComparison.OrdinalIgnoreCase)))
+            return false;
+        return !b.SideSolid[BlockFacing.UP.Index] && !b.SideSolid[BlockFacing.NORTH.Index];
     }
 
     /// <summary>

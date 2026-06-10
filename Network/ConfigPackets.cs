@@ -16,7 +16,6 @@ public class ConfigSyncPacket
     [ProtoMember(3)] public bool Enabled { get; set; }
     [ProtoMember(4)] public bool CompactRoom { get; set; }
     [ProtoMember(5)] public bool SeparateFloors { get; set; }
-    [ProtoMember(6)] public bool RestrictToSameRoom { get; set; }
     [ProtoMember(7)] public bool SortPlayerBackpack { get; set; }
 
     [ProtoMember(8)] public int SearchRadiusBlocks { get; set; }
@@ -45,7 +44,6 @@ public class ConfigChangePacket
     [ProtoMember(3)] public bool Enabled { get; set; }
     [ProtoMember(4)] public bool CompactRoom { get; set; }
     [ProtoMember(5)] public bool SeparateFloors { get; set; }
-    [ProtoMember(6)] public bool RestrictToSameRoom { get; set; }
     [ProtoMember(7)] public bool SortPlayerBackpack { get; set; }
 
     [ProtoMember(8)] public int SearchRadiusBlocks { get; set; }

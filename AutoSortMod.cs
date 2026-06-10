@@ -20,6 +20,10 @@ public class AutoSortMod : ModSystem
     private static readonly object Boxed = new();
     private IServerNetworkChannel? _channel;
     private readonly Dictionary<string, bool> _overlayByPlayer = new();
+    // Debounce state: the last closed chest and a generation counter so only the most
+    // recent timer actually triggers the (whole-room) sort.
+    private BlockPos? _pendingSortPos;
+    private int _sortGen;
 
     public override bool ShouldLoad(EnumAppSide forSide)
         => forSide == EnumAppSide.Server;
@@ -133,7 +137,6 @@ public class AutoSortMod : ModSystem
             Enabled = c.Enabled,
             CompactRoom = c.CompactRoom,
             SeparateFloors = c.SeparateFloors,
-            RestrictToSameRoom = c.RestrictToSameRoom,
             SortPlayerBackpack = c.SortPlayerBackpack,
             SearchRadiusBlocks = c.SearchRadiusBlocks,
             MaxNetworkChests = c.MaxNetworkChests,
@@ -160,7 +163,6 @@ public class AutoSortMod : ModSystem
             c.Enabled = p.Enabled;
             c.CompactRoom = p.CompactRoom;
             c.SeparateFloors = p.SeparateFloors;
-            c.RestrictToSameRoom = p.RestrictToSameRoom;
             c.SortPlayerBackpack = p.SortPlayerBackpack;
             c.SearchRadiusBlocks = System.Math.Max(1, p.SearchRadiusBlocks);
             c.MaxNetworkChests = System.Math.Max(1, p.MaxNetworkChests);
@@ -250,22 +252,17 @@ public class AutoSortMod : ModSystem
         inv.OnInventoryClosed += _ =>
         {
             if (_api == null || _cfg == null) return;
-            _api.Logger.Notification($"[AutoSort] Chest closed at {pos} — scheduling sort.");
-            // Defer the heavy sort+distribute to the next server tick so closing the
-            // chest returns immediately (no perceived lag). World access stays on the
-            // main thread via RegisterCallback.
+            // Debounce: remember the latest closed chest and (re)arm a timer. Each new
+            // close bumps the generation, so only the last timer actually sorts — the
+            // whole room is laid out ONCE after the player finishes, not per chest.
+            _pendingSortPos = pos;
+            int gen = ++_sortGen;
             _api.Event.RegisterCallback(_ =>
             {
-                if (_api == null || _cfg == null) return;
-                try
-                {
-                    NetworkDistributor.DistributeCascade(pos, _api, _cfg.Data);
-                }
-                catch (Exception ex)
-                {
-                    Mod.Logger.Warning($"[AutoSort] Error processing chest at {pos}: {ex.Message}");
-                }
-            }, 1);
+                if (gen != _sortGen || _api == null || _cfg == null || _pendingSortPos == null) return;
+                try { NetworkDistributor.DistributeCascade(_pendingSortPos, _api, _cfg.Data); }
+                catch (Exception ex) { Mod.Logger.Warning($"[AutoSort] Error processing chest at {_pendingSortPos}: {ex.Message}"); }
+            }, System.Math.Max(1, _cfg.Data.SortDebounceMs));
         };
     }
 }

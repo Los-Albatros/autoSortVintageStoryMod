@@ -6,11 +6,12 @@ public class SortConfig
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// When true, sorting only spans chests that share the same enclosed room as the
-    /// triggering chest, so a closed door separates two storage rooms. Falls back to
-    /// the full radius network when the area isn't an enclosed room (open base).
+    /// Delay (milliseconds) after a container closes before the room is sorted. Each new
+    /// close within the delay restarts the timer, so the sort runs ONCE after the player
+    /// finishes — not on every individual chest. Keeps a big room from being re-laid-out
+    /// dozens of times in a row.
     /// </summary>
-    public bool RestrictToSameRoom { get; set; } = true;
+    public int SortDebounceMs { get; set; } = 1500;
 
     /// <summary>
     /// When true, the whole container group in the room is laid out as one compact
@@ -20,13 +21,20 @@ public class SortConfig
     /// stacks across chests are merged. When false, the legacy specialist-chest
     /// distribution is used instead.
     /// </summary>
-    public bool CompactRoom { get; set; } = true;
+    public bool CompactRoom { get; set; } = false;
 
     /// <summary>
     /// When true, a player's backpack content is sorted when they close their inventory.
     /// The bag slots (where backpacks are equipped) and the hotbar are never touched.
     /// </summary>
-    public bool SortPlayerBackpack { get; set; } = true;
+    public bool SortPlayerBackpack { get; set; } = false;
+
+    /// <summary>
+    /// Block-code substrings of containers that must never be touched (neither read nor
+    /// written) — e.g. collapsed / ruined trunks that don't allow the player to place
+    /// items. Prevents items from being pushed into them.
+    /// </summary>
+    public List<string> IgnoredContainerCodes { get; set; } = ["collapsed"];
 
     /// <summary>
     /// Euclidean radius (in blocks) of each chest's neighbourhood. The network grows
@@ -39,7 +47,15 @@ public class SortConfig
     /// Safety cap on how many chests a single cascade may pull into one virtual
     /// network. Prevents a pathological flood-fill from scanning the whole world.
     /// </summary>
-    public int MaxNetworkChests { get; set; } = 256;
+    public int MaxNetworkChests { get; set; } = 1024;
+
+    /// <summary>
+    /// Safety cap on how many air cells the room flood-fill may visit. If the open space
+    /// reaches this many cells without closing off (an unenclosed / huge area), the area
+    /// is treated as "not a room" and only the triggering chest is sorted — nothing is
+    /// moved between containers out in the open.
+    /// </summary>
+    public int MaxRoomCells { get; set; } = 10000;
 
     /// <summary>
     /// When true, two chests separated by a solid block layer (a floor / ceiling) are
