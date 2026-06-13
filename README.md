@@ -21,11 +21,17 @@ across your whole storage room.
 - **Variant clustering.** Every variant of an item is kept together (all gears next to
   each other, all planks, all fruit…), grouped by its base name regardless of tier or
   colour.
+- **Propagation-aware sorting.** Cuttings, runners and similar propagation items sort
+  together, but trait-distinct stacks are still kept separate instead of being merged
+  into one incompatible stack.
 - **Spread layout ("valence", default).** The room's containers are laid out from a
   stable reference (the room's door, else a fixed corner — the same whichever chest you
   close). Each item kind gets its own chest, spreading across as many chests as the room
   offers; when there are more kinds than chests, chests take 2, then 3… kinds (balanced,
   like electron shells). No empty chest is ever left between filled ones.
+- **Sticky container ownership.** In spread layout, item families prefer the containers
+  that already held them before the sort, so established crock / cutting / seed vessels
+  stay where players expect instead of swapping places during a full room relayout.
 - **Dense compaction (optional).** Set `CompactRoom = true` to instead pack everything
   into the fewest chests.
 - **Room-aware (one virtual storage).** The mod floods the room's open space from the
@@ -114,8 +120,9 @@ client.
 2. The mod flood-fills the connected network of same-group containers in the room,
    skipping read-only/ignored containers and anything on another storey.
 3. The whole network is pooled into one inventory, sorted, and laid back out from a stable
-   anchor — spread across chests ("valence") or packed densely (`CompactRoom`). The layout
-   is deterministic, so re-sorting an already-sorted room moves nothing.
+   anchor — spread across chests ("valence") or packed densely (`CompactRoom`). In valence
+   mode, existing item families prefer containers that already held them, so the layout is
+   deterministic **and** respects established specialist containers where possible.
 4. The changed containers are pushed to nearby clients so the overlay updates live.
 
 ## Building from source
