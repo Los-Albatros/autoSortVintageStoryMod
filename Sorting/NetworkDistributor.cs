@@ -7,11 +7,13 @@ namespace autoSortVintageStoryMod.Sorting;
 
 // ── Data types used by the pure BFS layer ─────────────────────────────────────
 
-/// <summary>Represents a chest's contents as a list of (code, count, maxStack) tuples.</summary>
-public record ChestData(List<(string Code, int Count, int MaxStack)> Items, int SlotCount = 27);
+/// <summary>Represents a chest's contents as a list of stack-aware entries.</summary>
+public record ChestData(List<StackEntry> Items, int SlotCount = 27);
 
 /// <summary>A planned item transfer between two chest IDs.</summary>
-public record TransferPlan(string SourceId, string TargetId, string ItemCode, int Count);
+public record TransferPlan(string SourceId, string TargetId, StackIdentity ItemIdentity, int Count)
+{
+}
 
 /// <summary>Result of the pure BFS computation.</summary>
 public record DistributionResult(
@@ -27,7 +29,7 @@ public record CascadeStats(int Iterations, int TotalMoved, HashSet<string> Proce
 public static class NetworkDistributor
 {
     /// <summary>
-    /// Pure BFS function — no VS API dependency.
+    /// Pure BFS-style distribution function over stack-aware chest snapshots.
     /// Discovers the chest network, identifies specialised chests, and produces
     /// a list of transfer plans.
     /// </summary>
@@ -55,10 +57,10 @@ public static class NetworkDistributor
             // Compute type histogram for this chest
             var histogram = new Dictionary<SemanticType, int>();
             int total = 0;
-            foreach (var (code, count, _) in data.Items)
+            foreach (var entry in data.Items)
             {
-                if (count <= 0) continue;
-                var t = ItemClassifier.Classify(code);
+                if (entry.Count <= 0) continue;
+                var t = ItemClassifier.Classify(entry.Code);
                 histogram[t] = histogram.GetValueOrDefault(t) + 1;
                 total++;
             }
@@ -98,10 +100,10 @@ public static class NetworkDistributor
             {
                 var histogram = new Dictionary<SemanticType, int>();
                 int total = 0;
-                foreach (var (code, count, _) in data.Items)
+                foreach (var entry in data.Items)
                 {
-                    if (count <= 0) continue;
-                    var t = ItemClassifier.Classify(code);
+                    if (entry.Count <= 0) continue;
+                    var t = ItemClassifier.Classify(entry.Code);
                     histogram[t] = histogram.GetValueOrDefault(t) + 1;
                     total++;
                 }
@@ -118,17 +120,17 @@ public static class NetworkDistributor
             // Items that don't match this chest's speciality → send to the ONE primary
             // specialist (the one with the most existing items of that type).
             // Overflow items stay in source; subsequent passes try again.
-            foreach (var (code, count, maxStack) in data.Items)
+            foreach (var entry in data.Items)
             {
-                if (count <= 0) continue;
-                var itemType = ItemClassifier.Classify(code);
+                if (entry.Count <= 0) continue;
+                var itemType = ItemClassifier.Classify(entry.Code);
 
                 if (!specialists.TryGetValue(itemType, out var targets)) continue;
 
                 // Consolidation target: the specialist already holding the most items
-                // of the same BASE NAME (all gears land together), exact code as the
-                // tiebreak. Then spill to the next.
-                var baseName = ItemClassifier.BaseName(code);
+                // of the same BASE NAME (all gears land together), exact stack identity
+                // as the tiebreak. Then spill to the next.
+                var baseName = ItemClassifier.BaseName(entry.Code);
                 var ordered = targets
                     .Where(t => t != chestId)
                     .OrderByDescending(t =>
@@ -137,7 +139,7 @@ public static class NetworkDistributor
                             : 0)
                     .ThenByDescending(t =>
                         chests.TryGetValue(t, out var td)
-                            ? td.Items.Where(i => i.Code == code).Sum(i => i.Count)
+                            ? td.Items.Where(i => i.Identity.Equals(entry.Identity)).Sum(i => i.Count)
                             : 0)
                     .ToList();
 
@@ -146,25 +148,25 @@ public static class NetworkDistributor
                 // and a better-fitting specialist exists.
                 if (ownSpeciality.HasValue && ownSpeciality.Value == itemType)
                 {
-                    // Check if any other specialist has more of this exact code
-                    int ownCount = data.Items.Where(i => i.Code == code).Sum(i => i.Count);
+                    // Check if any other specialist has more of this exact stack identity
+                    int ownCount = data.Items.Where(i => i.Identity.Equals(entry.Identity)).Sum(i => i.Count);
                     bool betterExists = ordered.Any(t =>
                         chests.TryGetValue(t, out var td) &&
-                        td.Items.Where(i => i.Code == code).Sum(i => i.Count) > ownCount);
+                        td.Items.Where(i => i.Identity.Equals(entry.Identity)).Sum(i => i.Count) > ownCount);
                     if (!betterExists) continue;
                 }
 
-                int remaining = count;
+                int remaining = entry.Count;
                 foreach (var target in ordered)
                 {
                     if (remaining <= 0) break;
                     if (!chests.TryGetValue(target, out var tData)) continue;
 
-                    int canAccept = AvailableCapacity(tData, code, maxStack);
+                    int canAccept = AvailableCapacity(tData, entry.Identity);
                     if (canAccept <= 0) continue;
 
                     int send = Math.Min(remaining, canAccept);
-                    transfers.Add(new TransferPlan(chestId, target, code, send));
+                    transfers.Add(new TransferPlan(chestId, target, entry.Identity, send));
                     remaining -= send;
                 }
             }
@@ -243,17 +245,17 @@ public static class NetworkDistributor
     /// each up to its slot count and leaving trailing chests empty. Duplicate stacks
     /// scattered across chests merge naturally. Deterministic, hence idempotent.
     /// </summary>
-    public static List<List<(string Code, int Count, int MaxStack)>> ComputeCompactLayout(
-        IReadOnlyList<(string Code, int Count, int MaxStack)> pooled,
+    public static List<List<StackEntry>> ComputeCompactLayout(
+        IReadOnlyList<StackEntry> pooled,
         IReadOnlyList<int> chestSlotCounts)
     {
         var sorted = InventorySorter.SortItems(pooled);
-        var result = new List<List<(string Code, int Count, int MaxStack)>>(chestSlotCounts.Count);
+        var result = new List<List<StackEntry>>(chestSlotCounts.Count);
 
         int idx = 0;
         foreach (var cap in chestSlotCounts)
         {
-            var chest = new List<(string Code, int Count, int MaxStack)>();
+            var chest = new List<StackEntry>();
             for (int i = 0; i < cap && idx < sorted.Count; i++)
                 chest.Add(sorted[idx++]);
             result.Add(chest);
@@ -267,29 +269,37 @@ public static class NetworkDistributor
     }
 
     /// <summary>
-    /// Pure "valence" layout. Each distinct item (full code) is a resource that ideally
+    /// Pure "valence" layout. Each distinct base item family is a resource that ideally
     /// gets its own chest, spreading across as many chests as the room offers. When there
     /// are more distinct items than chests, chests take 2, then 3… resources (balanced),
     /// like filling electron shells. Chests fill in anchor order with no empty chest
     /// between filled ones; a resource too big for one chest overflows into the next.
     /// Deterministic, hence idempotent.
     /// </summary>
-    public static List<List<(string Code, int Count, int MaxStack)>> ComputeValenceLayout(
-        IReadOnlyList<(string Code, int Count, int MaxStack)> pooled,
+    public static List<List<StackEntry>> ComputeValenceLayout(
+        IReadOnlyList<StackEntry> pooled,
         IReadOnlyList<int> chestSlotCounts)
     {
         var sorted = InventorySorter.SortItems(pooled);
         int n = chestSlotCounts.Count;
-        var result = new List<List<(string Code, int Count, int MaxStack)>>(n);
+        var result = new List<List<StackEntry>>(n);
         for (int i = 0; i < n; i++) result.Add(new());
         if (n == 0 || sorted.Count == 0) return result;
 
-        // Group the sorted stacks into resources: one resource per distinct item code.
-        var resources = new List<List<(string Code, int Count, int MaxStack)>>();
-        string? curCode = null;
+        // Group the sorted stacks into resources: one resource per distinct base item family.
+        // Trait-distinct stacks and variant codes must stay separate for merging, but
+        // related variants should still lay out together so currant cuttings don't peel
+        // away from the rest of the cuttings into a crock vessel.
+        var resources = new List<List<StackEntry>>();
+        string? curBaseName = null;
         foreach (var stack in sorted)
         {
-            if (curCode == null || stack.Code != curCode) { resources.Add(new()); curCode = stack.Code; }
+            var baseName = ItemClassifier.BaseName(stack.Code);
+            if (curBaseName == null || baseName != curBaseName)
+            {
+                resources.Add(new());
+                curBaseName = baseName;
+            }
             resources[^1].Add(stack);
         }
 
@@ -339,19 +349,20 @@ public static class NetworkDistributor
         }
         if (invs.Count == 0) return;
 
-        // Pool every stack (clearing slots), keeping frozen clones keyed by item code.
-        var pooled = new List<(string, int, int)>();
-        var clonePool = new Dictionary<string, Queue<ItemStack>>(StringComparer.Ordinal);
+        // Pool every stack (clearing slots), keeping frozen clones keyed by stack identity.
+        var pooled = new List<StackEntry>();
+        var clonePool = new Dictionary<StackIdentity, Queue<ItemStack>>();
+        int order = 0;
         foreach (var inv in invs)
         {
             foreach (var slot in inv)
             {
                 if (slot.Itemstack == null) continue;
-                var code = slot.Itemstack.Collectible.Code.Path;
-                pooled.Add((code, slot.Itemstack.StackSize, slot.Itemstack.Collectible.MaxStackSize));
+                var identity = new StackIdentity(slot.Itemstack);
+                pooled.Add(new StackEntry(identity, slot.Itemstack.StackSize, order++));
                 var clone = slot.Itemstack.Clone();
-                if (!clonePool.TryGetValue(code, out var q))
-                    clonePool[code] = q = new Queue<ItemStack>();
+                if (!clonePool.TryGetValue(identity, out var q))
+                    clonePool[identity] = q = new Queue<ItemStack>();
                 q.Enqueue(clone);
                 slot.Itemstack = null;
                 slot.MarkDirty();
@@ -367,12 +378,12 @@ public static class NetworkDistributor
         {
             var slotList = invs[c].ToList();
             int idx = 0;
-            foreach (var (code, count, _) in layout[c])
+            foreach (var entry in layout[c])
             {
                 if (idx >= slotList.Count) break;
-                if (!clonePool.TryGetValue(code, out var q) || q.Count == 0) continue;
+                if (!clonePool.TryGetValue(entry.Identity, out var q) || q.Count == 0) continue;
                 var stack = q.Dequeue();
-                stack.StackSize = count;
+                stack.StackSize = entry.Count;
                 slotList[idx].Itemstack = stack;
                 slotList[idx].MarkDirty();
                 idx++;
@@ -632,14 +643,11 @@ public static class NetworkDistributor
             posLookup[key] = pos;
             keys.Add(key);
 
-            var items = new List<(string, int, int)>();
+            var items = new List<StackEntry>();
             foreach (var slot in inv)
             {
                 if (slot.Itemstack == null) continue;
-                items.Add((
-                    slot.Itemstack.Collectible.Code.Path,
-                    slot.Itemstack.StackSize,
-                    slot.Itemstack.Collectible.MaxStackSize));
+                items.Add(new StackEntry(new StackIdentity(slot.Itemstack), slot.Itemstack.StackSize, items.Count));
             }
             data[key] = new ChestData(items, inv.Count);
         }
@@ -678,7 +686,7 @@ public static class NetworkDistributor
 
         foreach (var srcSlot in srcSlots)
         {
-            if (srcSlot.Itemstack?.Collectible.Code.Path != plan.ItemCode) continue;
+            if (!plan.ItemIdentity.Matches(srcSlot.Itemstack)) continue;
 
             // Find a target slot: same item (merge) or empty
             foreach (var tgtSlot in tgtSlots)
@@ -686,7 +694,7 @@ public static class NetworkDistributor
                 if (srcSlot.Itemstack == null || srcSlot.Itemstack.StackSize <= 0) break;
 
                 bool tgtEmpty = tgtSlot.Itemstack == null;
-                bool tgtSameItem = tgtSlot.Itemstack?.Collectible.Code.Path == plan.ItemCode;
+                bool tgtSameItem = plan.ItemIdentity.Matches(tgtSlot.Itemstack);
 
                 if (!tgtEmpty && !tgtSameItem) continue;
 
@@ -747,8 +755,8 @@ public static class NetworkDistributor
         {
             if (slot.Itemstack == null || slot.Itemstack.StackSize <= 0) continue;
 
-            var code     = slot.Itemstack.Collectible.Code.Path;
-            var maxStack = slot.Itemstack.Collectible.MaxStackSize;
+            var identity = new StackIdentity(slot.Itemstack);
+            var maxStack = identity.MaxStackSize;
 
             foreach (var offset in offsets)
             {
@@ -769,7 +777,7 @@ public static class NetworkDistributor
                     if (slot.Itemstack == null || slot.Itemstack.StackSize <= 0) break;
 
                     bool empty    = tgtSlot.Itemstack == null;
-                    bool sameItem = tgtSlot.Itemstack?.Collectible.Code.Path == code;
+                    bool sameItem = identity.Matches(tgtSlot.Itemstack);
                     if (!empty && !sameItem) continue;
 
                     int current = tgtSlot.Itemstack?.StackSize ?? 0;
@@ -802,14 +810,14 @@ public static class NetworkDistributor
         return totalMoved;
     }
 
-    private static int AvailableCapacity(ChestData chest, string itemCode, int itemMaxStack)
+    private static int AvailableCapacity(ChestData chest, StackIdentity itemIdentity)
     {
         int usedSlots = chest.Items.Count(i => i.Count > 0);
         int emptySlots = Math.Max(0, chest.SlotCount - usedSlots);
         int partialSpace = chest.Items
-            .Where(i => i.Code == itemCode && i.Count > 0)
+            .Where(i => i.Identity.Equals(itemIdentity) && i.Count > 0)
             .Sum(i => i.MaxStack - i.Count);
-        return partialSpace + emptySlots * itemMaxStack;
+        return partialSpace + emptySlots * itemIdentity.MaxStackSize;
     }
 
     private static string PosKey(BlockPos p) => $"{p.X},{p.Y},{p.Z}";
@@ -821,7 +829,7 @@ public static class NetworkDistributor
     }
 
     /// <summary>
-    /// Pure cascade simulation — no VS API dependency.
+    /// Pure cascade simulation over stack-aware chest snapshots.
     /// Processes chests wave by wave: the origin first, then any chest that received
     /// items, until stable (no moves) or <paramref name="maxIterations"/> is reached.
     /// Mutates <paramref name="chests"/> in-place to reflect item movements.
@@ -866,10 +874,11 @@ public static class NetworkDistributor
                 if (!chests.TryGetValue(plan.TargetId, out var tgtData)) continue;
 
                 var srcItems = srcData.Items.ToList();
-                int srcIdx = srcItems.FindIndex(i => i.Code == plan.ItemCode);
+                int srcIdx = srcItems.FindIndex(i => i.Identity.Equals(plan.ItemIdentity));
                 if (srcIdx < 0) continue;
 
-                var (code, srcCount, maxStack) = srcItems[srcIdx];
+                var srcItem = srcItems[srcIdx];
+                int srcCount = srcItem.Count;
                 int take = Math.Min(srcCount, plan.Count);
                 if (take <= 0) continue;
 
@@ -877,20 +886,20 @@ public static class NetworkDistributor
                 if (srcCount - take <= 0)
                     srcItems.RemoveAt(srcIdx);
                 else
-                    srcItems[srcIdx] = (code, srcCount - take, maxStack);
+                    srcItems[srcIdx] = srcItem with { Count = srcCount - take };
                 chests[plan.SourceId] = srcData with { Items = srcItems };
 
                 // Add to target
                 var tgtItems = tgtData.Items.ToList();
-                int tgtIdx = tgtItems.FindIndex(i => i.Code == plan.ItemCode);
+                int tgtIdx = tgtItems.FindIndex(i => i.Identity.Equals(plan.ItemIdentity));
                 if (tgtIdx >= 0)
                 {
-                    var (tc, tCount, tMax) = tgtItems[tgtIdx];
-                    tgtItems[tgtIdx] = (tc, tCount + take, tMax);
+                    var tgtItem = tgtItems[tgtIdx];
+                    tgtItems[tgtIdx] = tgtItem with { Count = tgtItem.Count + take };
                 }
                 else
                 {
-                    tgtItems.Add((plan.ItemCode, take, maxStack));
+                    tgtItems.Add(new StackEntry(plan.ItemIdentity, take, tgtItems.Count));
                 }
                 chests[plan.TargetId] = tgtData with { Items = tgtItems };
 

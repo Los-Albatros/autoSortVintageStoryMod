@@ -5,34 +5,34 @@ namespace autoSortVintageStoryMod.Sorting;
 public static class InventorySorter
 {
     /// <summary>
-    /// Pure sorting + compaction function. No VS API dependency.
-    /// Input: a sequence of (Code, Count, MaxStack) tuples representing non-empty slots.
-    /// Returns a new list sorted by (SemanticType, MaterialTier, Code) with stacks compacted.
+    /// Sorting + compaction function for stack-aware entries.
+    /// Input: a sequence of non-empty stack entries.
+    /// Returns a new list sorted by (SemanticType, MaterialTier, Code) with only
+    /// stack-compatible entries compacted.
     /// </summary>
-    public static List<(string Code, int Count, int MaxStack)> SortItems(
-        IReadOnlyList<(string Code, int Count, int MaxStack)> items)
+    public static List<StackEntry> SortItems(IReadOnlyList<StackEntry> items)
     {
-        // 1. Compact: merge equal codes up to MaxStack
-        var grouped = new Dictionary<string, (int Total, int MaxStack)>(StringComparer.Ordinal);
+        // 1. Compact: merge only truly stack-compatible entries up to MaxStack
+        var grouped = new Dictionary<StackIdentity, (int Total, int Order)>();
 
-        foreach (var (code, count, max) in items)
+        foreach (var entry in items)
         {
-            if (string.IsNullOrEmpty(code) || count <= 0) continue;
-            if (grouped.TryGetValue(code, out var existing))
-                grouped[code] = (existing.Total + count, max);
+            if (string.IsNullOrEmpty(entry.Code) || entry.Count <= 0) continue;
+            if (grouped.TryGetValue(entry.Identity, out var existing))
+                grouped[entry.Identity] = (existing.Total + entry.Count, existing.Order);
             else
-                grouped[code] = (count, max);
+                grouped[entry.Identity] = (entry.Count, entry.Order);
         }
 
         // 2. Split stacks exceeding MaxStack
-        var flat = new List<(string Code, int Count, int MaxStack)>();
-        foreach (var (code, (total, max)) in grouped)
+        var flat = new List<StackEntry>();
+        foreach (var (identity, group) in grouped)
         {
-            var remaining = total;
+            var remaining = group.Total;
             while (remaining > 0)
             {
-                var take = Math.Min(remaining, max);
-                flat.Add((code, take, max));
+                var take = Math.Min(remaining, identity.MaxStackSize);
+                flat.Add(new StackEntry(identity, take, group.Order));
                 remaining -= take;
             }
         }
@@ -57,14 +57,17 @@ public static class InventorySorter
             var mb = ItemClassifier.MaterialTier(b.Code);
             if (ma != mb) return ma.CompareTo(mb);
 
-            return string.Compare(a.Code, b.Code, StringComparison.Ordinal);
+            var codeCmp = string.Compare(a.Code, b.Code, StringComparison.Ordinal);
+            if (codeCmp != 0) return codeCmp;
+
+            return a.Order.CompareTo(b.Order);
         });
 
         return flat;
     }
 
     /// <summary>
-    /// VS-aware adapter: reads all slots from <paramref name="inventory"/>,
+    /// Reads all slots from <paramref name="inventory"/>,
     /// calls SortItems, writes sorted stacks back, clears trailing slots.
     /// </summary>
     public static void Sort(IInventory inventory) => SortSlots(inventory.ToList());
@@ -77,23 +80,22 @@ public static class InventorySorter
     public static void SortSlots(IReadOnlyList<ItemSlot> slotList)
     {
         // Snapshot non-empty slots
-        var snapshot = new List<(string Code, int Count, int MaxStack)>();
-        // Pre-build a frozen clone lookup BEFORE any write-back (keyed by code → queue of clones)
-        var clonePool = new Dictionary<string, Queue<ItemStack>>(StringComparer.Ordinal);
+        var snapshot = new List<StackEntry>();
+        // Pre-build a frozen clone lookup BEFORE any write-back (keyed by stack identity → queue of clones)
+        var clonePool = new Dictionary<StackIdentity, Queue<ItemStack>>();
+        int order = 0;
 
         foreach (var slot in slotList)
         {
             if (slot.Itemstack == null) continue;
-            var code = slot.Itemstack.Collectible.Code.Path;
-            var count = slot.Itemstack.StackSize;
-            var max = slot.Itemstack.Collectible.MaxStackSize;
+            var identity = new StackIdentity(slot.Itemstack);
 
-            snapshot.Add((code, count, max));
+            snapshot.Add(new StackEntry(identity, slot.Itemstack.StackSize, order++));
 
             // Clone the stack now, before any modification
             var clone = slot.Itemstack.Clone();
-            if (!clonePool.TryGetValue(code, out var queue))
-                clonePool[code] = queue = new Queue<ItemStack>();
+            if (!clonePool.TryGetValue(identity, out var queue))
+                clonePool[identity] = queue = new Queue<ItemStack>();
             queue.Enqueue(clone);
         }
 
@@ -102,17 +104,17 @@ public static class InventorySorter
         // Write back using the frozen clone pool
         int slotIndex = 0;
 
-        foreach (var (code, count, _) in sorted)
+        foreach (var entry in sorted)
         {
             if (slotIndex >= slotList.Count) break;
             var slot = slotList[slotIndex];
 
-            // Pick a clone from the frozen pool (first available for this code)
+            // Pick a clone from the frozen pool (first available for this exact stack identity)
             ItemStack? source = null;
-            if (clonePool.TryGetValue(code, out var pool) && pool.Count > 0)
+            if (clonePool.TryGetValue(entry.Identity, out var pool) && pool.Count > 0)
             {
                 source = pool.Dequeue();
-                source.StackSize = count;
+                source.StackSize = entry.Count;
             }
 
             if (source != null)

@@ -48,7 +48,7 @@ public static class ItemClassifier
                                  "ointment"]),
 
         // Seeds & propagation
-        (SemanticType.Seed,     ["seed", "sapling", "cutting", "clipping", "bulb", "spore"]),
+        (SemanticType.Seed,     ["seed", "sapling", "cutting", "runner", "clipping", "bulb", "spore"]),
 
         // Cooking ingredients (before Drink so "oilportion" wins over "portion")
         (SemanticType.Ingredient, ["flour", "dough", "oil", "butter", "fat", "sugar", "spice",
