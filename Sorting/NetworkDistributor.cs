@@ -269,7 +269,7 @@ public static class NetworkDistributor
     }
 
     /// <summary>
-    /// Pure "valence" layout. Each distinct item code is a resource that ideally
+    /// Pure "valence" layout. Each distinct base item family is a resource that ideally
     /// gets its own chest, spreading across as many chests as the room offers. When there
     /// are more distinct items than chests, chests take 2, then 3… resources (balanced),
     /// like filling electron shells. Chests fill in anchor order with no empty chest
@@ -286,17 +286,19 @@ public static class NetworkDistributor
         for (int i = 0; i < n; i++) result.Add(new());
         if (n == 0 || sorted.Count == 0) return result;
 
-        // Group the sorted stacks into resources: one resource per distinct item code.
-        // Trait-distinct stacks of the same item code must stay separate for merging,
-        // but should still lay out together so one odd cutting doesn't claim a crock vessel.
+        // Group the sorted stacks into resources: one resource per distinct base item family.
+        // Trait-distinct stacks and variant codes must stay separate for merging, but
+        // related variants should still lay out together so currant cuttings don't peel
+        // away from the rest of the cuttings into a crock vessel.
         var resources = new List<List<StackEntry>>();
-        string? curCode = null;
+        string? curBaseName = null;
         foreach (var stack in sorted)
         {
-            if (curCode == null || stack.Code != curCode)
+            var baseName = ItemClassifier.BaseName(stack.Code);
+            if (curBaseName == null || baseName != curBaseName)
             {
                 resources.Add(new());
-                curCode = stack.Code;
+                curBaseName = baseName;
             }
             resources[^1].Add(stack);
         }
