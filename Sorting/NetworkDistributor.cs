@@ -278,7 +278,8 @@ public static class NetworkDistributor
     /// </summary>
     public static List<List<StackEntry>> ComputeValenceLayout(
         IReadOnlyList<StackEntry> pooled,
-        IReadOnlyList<int> chestSlotCounts)
+        IReadOnlyList<int> chestSlotCounts,
+        IReadOnlyList<Dictionary<string, int>> existingFamilyCounts)
     {
         var sorted = InventorySorter.SortItems(pooled);
         int n = chestSlotCounts.Count;
@@ -303,23 +304,46 @@ public static class NetworkDistributor
             resources[^1].Add(stack);
         }
 
-        // Distribute the distinct items evenly across the chests so EVERY chest gets one
-        // before any gets a second (electron-shell / Hund's rule). Each chest receives
-        // floor(R/N) items, and the first (R mod N) chests one extra. Because the items
-        // are sorted, a chest that holds several gets same-family items grouped together.
-        int r = resources.Count;
-        int baseCount = r / n, remainder = r % n;
-        int chest = 0, resInChest = 0;
+        var remainingSlots = chestSlotCounts.ToArray();
+        var resourceCounts = new int[n];
+
         foreach (var resource in resources)
         {
+            var familyKey = ItemClassifier.BaseName(resource[0].Code);
+            var preferredChests = Enumerable.Range(0, n)
+                .Where(i => i < existingFamilyCounts.Count &&
+                            existingFamilyCounts[i].TryGetValue(familyKey, out var count) &&
+                            count > 0)
+                .OrderByDescending(i => existingFamilyCounts[i][familyKey])
+                .ThenBy(i => i)
+                .ToList();
+
+            var fallbackChests = Enumerable.Range(0, n)
+                .Where(i => !preferredChests.Contains(i))
+                .OrderBy(i => resourceCounts[i])
+                .ThenBy(i => i)
+                .ToList();
+
+            var candidateChests = preferredChests.Concat(fallbackChests).ToList();
+            int candidateIndex = 0;
+            int? primaryChest = null;
+
             foreach (var stack in resource)
             {
-                while (chest < n - 1 && result[chest].Count >= chestSlotCounts[chest]) { chest++; resInChest = 0; }
+                while (candidateIndex < candidateChests.Count &&
+                       remainingSlots[candidateChests[candidateIndex]] <= 0)
+                    candidateIndex++;
+
+                if (candidateIndex >= candidateChests.Count) break;
+
+                int chest = candidateChests[candidateIndex];
                 result[chest].Add(stack);
+                remainingSlots[chest]--;
+                primaryChest ??= chest;
             }
-            resInChest++;
-            int quota = baseCount + (chest < remainder ? 1 : 0);
-            if (resInChest >= quota && chest < n - 1) { chest++; resInChest = 0; }
+
+            if (primaryChest.HasValue)
+                resourceCounts[primaryChest.Value]++;
         }
 
         return result;
@@ -351,15 +375,19 @@ public static class NetworkDistributor
 
         // Pool every stack (clearing slots), keeping frozen clones keyed by stack identity.
         var pooled = new List<StackEntry>();
+        var existingFamilyCounts = new List<Dictionary<string, int>>(invs.Count);
         var clonePool = new Dictionary<StackIdentity, Queue<ItemStack>>();
         int order = 0;
         foreach (var inv in invs)
         {
+            var familyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var slot in inv)
             {
                 if (slot.Itemstack == null) continue;
                 var identity = new StackIdentity(slot.Itemstack);
                 pooled.Add(new StackEntry(identity, slot.Itemstack.StackSize, order++));
+                var familyKey = ItemClassifier.BaseName(identity.Code);
+                familyCounts[familyKey] = familyCounts.GetValueOrDefault(familyKey) + slot.Itemstack.StackSize;
                 var clone = slot.Itemstack.Clone();
                 if (!clonePool.TryGetValue(identity, out var q))
                     clonePool[identity] = q = new Queue<ItemStack>();
@@ -367,12 +395,13 @@ public static class NetworkDistributor
                 slot.Itemstack = null;
                 slot.MarkDirty();
             }
+            existingFamilyCounts.Add(familyCounts);
         }
 
         var slotCounts = invs.Select(i => i.Count).ToList();
         var layout = cfg.CompactRoom
             ? ComputeCompactLayout(pooled, slotCounts)
-            : ComputeValenceLayout(pooled, slotCounts);
+            : ComputeValenceLayout(pooled, slotCounts, existingFamilyCounts);
 
         for (int c = 0; c < invs.Count; c++)
         {
