@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+env:
+  # Vintage Story version whose server assemblies the mod builds against. The public
+  # server tarball must exist at the CDN URL in the "Fetch Vintage Story" step below.
+  # Bump this to match the game version you target.
+  VS_VERSION: "1.22.0"
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache Vintage Story assemblies
+        id: cache-vs
+        uses: actions/cache@v4
+        with:
+          path: ~/vs
+          key: vs-server-${{ env.VS_VERSION }}
+
+      - name: Fetch Vintage Story server assemblies
+        if: steps.cache-vs.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          url="https://cdn.vintagestory.at/gamefiles/stable/vs_server_linux-x64_${VS_VERSION}.tar.gz"
+          echo "Downloading $url"
+          mkdir -p "$HOME/vs"
+          curl -fsSL "$url" -o /tmp/vs_server.tar.gz
+          tar -xzf /tmp/vs_server.tar.gz -C "$HOME/vs"
+
+      - name: Export VINTAGE_STORY
+        run: |
+          set -euo pipefail
+          vsdir="$(dirname "$(find "$HOME/vs" -name VintagestoryAPI.dll | head -n1)")"
+          test -n "$vsdir"
+          echo "VINTAGE_STORY=$vsdir" >> "$GITHUB_ENV"
+          echo "Using VINTAGE_STORY=$vsdir"
+
+      - name: Build (Release)
+        run: dotnet build Tests/autoSortVintageStoryMod.Tests.csproj -c Release
+
+      - name: Test (Release)
+        run: dotnet test Tests/autoSortVintageStoryMod.Tests.csproj -c Release --no-build

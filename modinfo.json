@@ -2,7 +2,7 @@
     "type": "code",
     "name": "AutoSort",
     "modid": "autosort",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Automatically sorts and consolidates container contents on close: groups items by semantic type, keeps every variant of an item together, and distributes them across neighbouring chests in the same room. Includes an optional read-only /sort overlay that shows a container's contents at a glance.",
     "authors": ["Los Albatros"],
     "website": "https://github.com/Los-Albatros/autoSortVintageStoryMod",

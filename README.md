@@ -84,7 +84,7 @@ The overlay is per-player and persists across reconnects and server restarts.
 
 ## Installation
 
-Download `autosort_0.1.2.zip` and drop it in the Vintage Story `Mods/` folder.
+Download `autosort_0.1.3.zip` and drop it in the Vintage Story `Mods/` folder.
 
 - **Server: required.** Installing the mod on the server enables the sorting for
   **everyone**, including players who don't have the mod. A config file `autosort.json`
@@ -128,13 +128,15 @@ client.
 ## Building from source
 
 ```
-dotnet build autoSortVintageStoryMod -c Release
-dotnet test  autoSortVintageStoryMod.Tests
+dotnet build autoSortVintageStoryMod.csproj -c Release
+dotnet test  Tests/autoSortVintageStoryMod.Tests.csproj
 ```
 
 Requires the `VINTAGE_STORY` environment variable pointing at your game install (used to
 resolve `VintagestoryAPI.dll` and `VSSurvivalMod.dll`). The classifier and distribution
-logic are pure and covered by unit tests.
+logic are pure and covered by unit tests under `Tests/`. GitHub Actions
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the mod and runs the tests
+on every push and pull request, fetching the matching Vintage Story server assemblies.
 
 ## License
 

@@ -350,6 +350,15 @@ public static class NetworkDistributor
     }
 
     /// <summary>
+    /// Convenience overload for callers (and tests) with no prior ownership information:
+    /// lays out purely by the balanced "valence" rule, no container kept sticky.
+    /// </summary>
+    public static List<List<StackEntry>> ComputeValenceLayout(
+        IReadOnlyList<StackEntry> pooled,
+        IReadOnlyList<int> chestSlotCounts)
+        => ComputeValenceLayout(pooled, chestSlotCounts, System.Array.Empty<Dictionary<string, int>>());
+
+    /// <summary>
     /// Pools every container in the network (clearing them), computes the target layout —
     /// dense compaction or the spread "valence" layout depending on
     /// <see cref="SortConfig.CompactRoom"/> — and writes the items back, chests ordered
