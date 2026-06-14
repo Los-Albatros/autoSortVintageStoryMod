@@ -152,7 +152,6 @@ public static class ConfigLibIntegration
                 SpecialisationThreshold = _threshold,
                 EnabledKinds = _enabledKinds.ToArray(),
             });
-            _lastHash = ""; // force re-sync on next server snapshot
         }
     }
 }
