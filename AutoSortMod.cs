@@ -174,6 +174,10 @@ public class AutoSortMod : ModSystem
                     .Distinct(System.StringComparer.OrdinalIgnoreCase).ToList();
             _cfg.Save();
             _api.Logger.Notification($"[AutoSort] Config updated by {player.PlayerName}.");
+
+            if (c.SortPlayerBackpack)
+                foreach (var p2 in _api.World.AllOnlinePlayers.OfType<IServerPlayer>())
+                    HookBackpack(p2);
         }
 
         SendConfigSync(player);
