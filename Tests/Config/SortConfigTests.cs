@@ -102,6 +102,40 @@ public class SortConfigTests
         Assert.Equal(new[] { "trunk" }, cfg.GetContainerGroup("trunk"));
     }
 
+    // ── IsIgnoredCode ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void IsIgnoredCode_MatchesCollapsedTrunkByTypedVariant()
+    {
+        var cfg = new SortConfig();
+        cfg.EnsureDefaults(); // IgnoredContainerCodes includes "collapsed"
+
+        // A collapsed trunk keeps block code "trunk-east" but reports type "collapsed1":
+        // matching only the code path would miss it.
+        Assert.True(cfg.IsIgnoredCode("trunk-east", "collapsed1"));
+        Assert.True(cfg.IsIgnoredCode("trunk-east", "collapsed3"));
+    }
+
+    [Fact]
+    public void IsIgnoredCode_LeavesUsableTrunkAlone()
+    {
+        var cfg = new SortConfig();
+        cfg.EnsureDefaults();
+
+        Assert.False(cfg.IsIgnoredCode("trunk-east", "normal-generic"));
+        Assert.False(cfg.IsIgnoredCode("trunk-east", null));
+    }
+
+    [Fact]
+    public void IsIgnoredCode_MatchesByBlockCodePath()
+    {
+        var cfg = new SortConfig();
+        cfg.EnsureDefaults();
+
+        // The original path-based behaviour still holds for codes carried in the block path.
+        Assert.True(cfg.IsIgnoredCode("collapsedchest-north", null));
+    }
+
     [Fact]
     public void GetContainerGroup_TrunkGroupedWithChest_SharesOneNetwork()
     {

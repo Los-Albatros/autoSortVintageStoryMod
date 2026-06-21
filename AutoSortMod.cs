@@ -220,8 +220,20 @@ public class AutoSortMod : ModSystem
 
         try
         {
+            // Large containers (the wooden trunk) span two cells; only the principal cell
+            // holds the block entity. If the player opened it via its multiblock filler half,
+            // GetBlockEntity here finds nothing, so resolve to the principal cell. The filler
+            // code encodes the offset; we try both signs and keep whichever cell is a real
+            // container so we don't depend on the engine's offset-sign convention.
+            var ba = _api.World.BlockAccessor;
             var pos = blockSel.Position;
-            var be = _api.World.BlockAccessor.GetBlockEntity(pos);
+            if (ba.GetBlockEntity(pos) is not IBlockEntityContainer &&
+                MultiblockResolver.TryParseFillerOffset(ba.GetBlock(pos)?.Code?.Path, out int dx, out int dy, out int dz))
+            {
+                foreach (var cand in new[] { pos.AddCopy(dx, dy, dz), pos.AddCopy(-dx, -dy, -dz) })
+                    if (ba.GetBlockEntity(cand) is IBlockEntityContainer) { pos = cand; break; }
+            }
+            var be = ba.GetBlockEntity(pos);
             if (be is not IBlockEntityContainer container) return;
 
             var inv = container.Inventory;

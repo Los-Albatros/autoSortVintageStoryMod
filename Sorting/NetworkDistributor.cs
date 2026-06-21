@@ -522,16 +522,23 @@ public static class NetworkDistributor
         if (block?.Code == null) return false;
 
         var path = block.Code.Path;
-        if (cfg.IgnoredContainerCodes.Any(ig => path.Contains(ig, StringComparison.OrdinalIgnoreCase)))
-            return true;
+        // Typed containers (e.g. the wooden trunk) carry their subtype in a block-entity field,
+        // not the block code: a collapsed trunk stays "trunk-east" but reports type "collapsed1".
+        var type = TypedContainerType(api.World.BlockAccessor.GetBlockEntity(pos));
+
+        if (cfg.IsIgnoredCode(path, type)) return true;
 
         try
         {
             var ro = block.Attributes?["retrieveOnly"];
             if (ro != null && ro.Exists)
             {
-                if (ro.AsBool(false)) return true;
-                var s = ro.AsString(null);
+                // retrieveOnly may be a plain bool, or a by-type map (key = container type) as on
+                // the trunk: { "normal-generic": false, "collapsed1": true, ... }. Resolve the
+                // type's entry first, falling back to the node itself for plain-bool blocks.
+                var roVal = (type != null && ro[type] is { Exists: true } byType) ? byType : ro;
+                if (roVal.AsBool(false)) return true;
+                var s = roVal.AsString(null);
                 if (s != null && (s.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
                                   s.Equals("true", StringComparison.OrdinalIgnoreCase)))
                     return true;
@@ -541,6 +548,13 @@ public static class NetworkDistributor
 
         return false;
     }
+
+    /// <summary>
+    /// The subtype string of a typed container block entity (e.g. "normal-generic" /
+    /// "collapsed1" for a trunk), or null for containers that have no typed variant.
+    /// </summary>
+    private static string? TypedContainerType(BlockEntity? be)
+        => be is Vintagestory.GameContent.BlockEntityGenericTypedContainer c ? c.type : null;
 
     /// <summary>
     /// True if <paramref name="pos"/> is on the same storey as <paramref name="origin"/>:

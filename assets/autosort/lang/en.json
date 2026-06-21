@@ -20,7 +20,7 @@
     "autosort:cfg-containers": "Sorted container types",
     "autosort:cfg-add": "Add",
     "autosort:cfg-groups": "Container groups",
-    "autosort:cfg-groups-hint": "Items only sort within their group. A kind must also be in the list above to be sorted at all.",
+    "autosort:cfg-groups-hint": "Items only sort within their group.\nA kind must also be in the list above to be sorted at all.",
     "autosort:cfg-group": "Group",
     "autosort:cfg-group-remove": "remove group",
     "autosort:cfg-group-new": "+ New group"

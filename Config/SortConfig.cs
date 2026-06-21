@@ -131,6 +131,18 @@ public class SortConfig
     }
 
     /// <summary>
+    /// True if a container must be left untouched because its block code path OR its typed
+    /// variant matches one of <see cref="IgnoredContainerCodes"/>. The typed variant matters
+    /// for containers whose subtype lives in a block-entity attribute rather than the code:
+    /// a collapsed wooden trunk keeps block code "trunk-east" but reports type "collapsed1",
+    /// so matching only the code path would never exclude it.
+    /// </summary>
+    public bool IsIgnoredCode(string blockCodePath, string? containerType)
+        => IgnoredContainerCodes.Any(ig =>
+            (blockCodePath != null && blockCodePath.Contains(ig, System.StringComparison.OrdinalIgnoreCase)) ||
+            (containerType != null && containerType.Contains(ig, System.StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>
     /// Returns the group class list that contains <paramref name="className"/>,
     /// or a single-element list with the class itself as a fallback.
     /// </summary>
