@@ -1,6 +1,7 @@
 using System.Linq;
 using ConfigLib;
 using ImGuiNET;
+using autoSortVintageStoryMod.Config;
 using autoSortVintageStoryMod.Network;
 using Vintagestory.API.Client;
 using Vintagestory.API.Config;
@@ -68,9 +69,7 @@ public static class ConfigLibIntegration
         _maxVSpan = cfg.MaxVerticalSpan;
         _threshold = (float)cfg.SpecialisationThreshold;
         _enabledKinds = cfg.EnabledKinds.Distinct(System.StringComparer.OrdinalIgnoreCase).ToList();
-        _groups = cfg.ContainerGroups
-            .Select(g => g.Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries).ToList())
-            .ToList();
+        _groups = ContainerGroupCodec.Decode(cfg.ContainerGroups);
         _groupAddSel.Clear();
     }
 
@@ -205,11 +204,7 @@ public static class ConfigLibIntegration
                 MaxVerticalSpan = _maxVSpan,
                 SpecialisationThreshold = _threshold,
                 EnabledKinds = _enabledKinds.ToArray(),
-                ContainerGroups = _groups
-                    .Select(gr => string.Join(",", gr.Where(s => !string.IsNullOrWhiteSpace(s))
-                                                     .Distinct(System.StringComparer.OrdinalIgnoreCase)))
-                    .Where(s => s.Length > 0)
-                    .ToArray(),
+                ContainerGroups = ContainerGroupCodec.Encode(_groups),
             });
         }
     }

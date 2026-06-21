@@ -144,7 +144,7 @@ public class AutoSortMod : ModSystem
             SpecialisationThreshold = c.SpecialisationThreshold,
             EnabledKinds = c.SupportedInventoryClasses.ToArray(),
             DiscoveredKinds = ContainerDiscovery.Discover(_api),
-            ContainerGroups = c.ContainerGroups.Select(g => string.Join(",", g)).ToArray(),
+            ContainerGroups = ContainerGroupCodec.Encode(c.ContainerGroups),
         }, player);
     }
 
@@ -174,11 +174,7 @@ public class AutoSortMod : ModSystem
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .Distinct(System.StringComparer.OrdinalIgnoreCase).ToList();
             if (p.ContainerGroups is { Length: > 0 })
-                c.ContainerGroups = p.ContainerGroups
-                    .Select(g => g.Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries)
-                                  .Distinct(System.StringComparer.OrdinalIgnoreCase).ToList())
-                    .Where(g => g.Count > 0)
-                    .ToList();
+                c.ContainerGroups = ContainerGroupCodec.Decode(p.ContainerGroups);
             _cfg.Save();
             _api.Logger.Notification($"[AutoSort] Config updated by {player.PlayerName}.");
 
