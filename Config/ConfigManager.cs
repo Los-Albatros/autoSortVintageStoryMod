@@ -17,6 +17,7 @@ public class ConfigManager
         try
         {
             _data = _api.LoadModConfig<SortConfig>(FileName) ?? new SortConfig();
+            _data.EnsureDefaults();
         }
         catch (Exception ex)
         {

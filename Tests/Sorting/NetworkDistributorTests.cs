@@ -309,6 +309,109 @@ public class ValenceLayoutTests
 
         Assert.Equal(Sig(first), Sig(second));
     }
+
+    // ── Crate-aware room layout ───────────────────────────────────────────────
+
+    // A synthetic crate locked type (an exact stack identity).
+    private static StackIdentity Lock(string code, int max = 64) => new(code, max);
+
+    private static readonly IReadOnlyList<Dictionary<string, int>> NoOwnership =
+        System.Array.Empty<Dictionary<string, int>>();
+
+    [Fact]
+    public void Crate_KeepsOnlyItsLockedType()
+    {
+        // Container 0 = crate locked to coal; container 1 = chest. A foreign type (iron ingot)
+        // in the pool must never enter the crate.
+        var pooled = new List<StackEntry>
+        {
+            E("game:ore-bituminouscoal", 100), E("game:ingot-iron", 10),
+        };
+        var layout = NetworkDistributor.ComputeRoomLayout(
+            pooled,
+            slotCounts: new[] { 20, 16 },
+            isCrate: new[] { true, false },
+            crateLockedTypes: new StackIdentity?[] { Lock("game:ore-bituminouscoal"), null },
+            existingFamilyCounts: NoOwnership);
+
+        Assert.All(layout[0], e => Assert.Equal("game:ore-bituminouscoal", e.Code));
+        Assert.DoesNotContain(layout[0], e => e.Code == "game:ingot-iron");
+        Assert.Contains(layout[1], e => e.Code == "game:ingot-iron");
+        Assert.Equal(100, layout.SelectMany(c => c).Where(e => e.Code == "game:ore-bituminouscoal").Sum(e => e.Count));
+    }
+
+    [Fact]
+    public void Crate_VacuumsMatchingItems_OverflowGoesToChest()
+    {
+        // 200 bones (max 32 → 4 full + remainder), crate has only 2 slots. The crate fills
+        // first (prefer-crate); the rest overflows to the chest.
+        var pooled = new List<StackEntry> { E("game:bone", 200, 32) };
+        var layout = NetworkDistributor.ComputeRoomLayout(
+            pooled,
+            slotCounts: new[] { 2, 16 },
+            isCrate: new[] { true, false },
+            crateLockedTypes: new StackIdentity?[] { Lock("game:bone", 32), null },
+            existingFamilyCounts: NoOwnership);
+
+        Assert.Equal(2, layout[0].Count);               // crate full (2 slots)
+        Assert.Equal(64, layout[0].Sum(e => e.Count));  // 2 × 32
+        Assert.Equal(136, layout[1].Sum(e => e.Count)); // overflow to chest
+        Assert.Equal(200, layout.SelectMany(c => c).Sum(e => e.Count));
+    }
+
+    [Fact]
+    public void EmptyCrate_StaysEmpty()
+    {
+        // Container 0 is a crate with no locked type (empty) → receives nothing, even though
+        // it has slots. Items land in the chest only.
+        var pooled = new List<StackEntry> { E("game:ingot-iron", 5) };
+        var layout = NetworkDistributor.ComputeRoomLayout(
+            pooled,
+            slotCounts: new[] { 20, 16 },
+            isCrate: new[] { true, false },
+            crateLockedTypes: new StackIdentity?[] { null, null },
+            existingFamilyCounts: NoOwnership);
+
+        Assert.Empty(layout[0]);
+        Assert.Equal(5, layout[1].Sum(e => e.Count));
+    }
+
+    [Fact]
+    public void TwoCratesSameType_FirstFills_SecondTakesRemainder()
+    {
+        // Two 2-slot crates locked to bone, 200 bones (max 64 → 64,64,64,8). Crate 0 takes the
+        // first two stacks (128), crate 1 the rest (72); the chest stays empty.
+        var pooled = new List<StackEntry> { E("game:bone", 200, 64) };
+        var layout = NetworkDistributor.ComputeRoomLayout(
+            pooled,
+            slotCounts: new[] { 2, 2, 16 },
+            isCrate: new[] { true, true, false },
+            crateLockedTypes: new StackIdentity?[] { Lock("game:bone"), Lock("game:bone"), null },
+            existingFamilyCounts: NoOwnership);
+
+        Assert.Equal(128, layout[0].Sum(e => e.Count));
+        Assert.Equal(72, layout[1].Sum(e => e.Count));
+        Assert.Empty(layout[2]);
+        Assert.Equal(200, layout.SelectMany(c => c).Sum(e => e.Count));
+    }
+
+    [Fact]
+    public void RoomLayout_IsIdempotent()
+    {
+        var pooled = new List<StackEntry>
+        {
+            E("game:ore-bituminouscoal", 100), E("game:ingot-iron", 80), E("game:gear-rusty", 12),
+        };
+        var slots = new[] { 20, 6, 6 };
+        var crates = new[] { true, false, false };
+        var locked = new StackIdentity?[] { Lock("game:ore-bituminouscoal"), null, null };
+
+        var first = NetworkDistributor.ComputeRoomLayout(pooled, slots, crates, locked, NoOwnership);
+        var second = NetworkDistributor.ComputeRoomLayout(
+            first.SelectMany(c => c).ToList(), slots, crates, locked, NoOwnership);
+
+        Assert.Equal(Sig(first), Sig(second));
+    }
 }
 
 public class CascadeTests
