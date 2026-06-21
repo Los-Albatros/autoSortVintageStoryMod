@@ -19,6 +19,10 @@ public static class ConfigLibIntegration
     private static int _radius, _maxChests, _maxVSpan, _selectedDiscovered;
     private static float _threshold;
     private static System.Collections.Generic.List<string> _enabledKinds = new();
+    // Editable container groups: each inner list is one group of kinds. Items only sort
+    // within a group. Parallel per-group "add" combo selection, keyed by group index.
+    private static System.Collections.Generic.List<System.Collections.Generic.List<string>> _groups = new();
+    private static readonly System.Collections.Generic.Dictionary<int, int> _groupAddSel = new();
     private static string _customKind = "";
     private static string _lastHash = "";
 
@@ -49,7 +53,8 @@ public static class ConfigLibIntegration
     {
         string hash = $"{cfg.IsAdmin}|{cfg.OverlayEnabled}|{cfg.Enabled}|{cfg.CompactRoom}|{cfg.SeparateFloors}|" +
                       $"{cfg.SortPlayerBackpack}|{cfg.SearchRadiusBlocks}|{cfg.MaxNetworkChests}|" +
-                      $"{cfg.MaxVerticalSpan}|{cfg.SpecialisationThreshold}|{string.Join(',', cfg.EnabledKinds)}";
+                      $"{cfg.MaxVerticalSpan}|{cfg.SpecialisationThreshold}|{string.Join(',', cfg.EnabledKinds)}|" +
+                      $"{string.Join('|', cfg.ContainerGroups)}";
         if (hash == _lastHash) return;
         _lastHash = hash;
 
@@ -63,6 +68,10 @@ public static class ConfigLibIntegration
         _maxVSpan = cfg.MaxVerticalSpan;
         _threshold = (float)cfg.SpecialisationThreshold;
         _enabledKinds = cfg.EnabledKinds.Distinct(System.StringComparer.OrdinalIgnoreCase).ToList();
+        _groups = cfg.ContainerGroups
+            .Select(g => g.Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries).ToList())
+            .ToList();
+        _groupAddSel.Clear();
     }
 
     private static void Draw(string id, bool save, AutoSortClientSystem client, ConfigSyncPacket cfg)
@@ -133,6 +142,51 @@ public static class ConfigLibIntegration
             _customKind = "";
         }
 
+        // ── Container groups ───────────────────────────────────────────────────
+        // Items only sort/distribute within a single group. A kind must also appear in
+        // the "Sorted container types" list above to be touched at all.
+        ImGui.Spacing();
+        ImGui.Text(Lang.Get("autosort:cfg-groups"));
+        ImGui.TextDisabled(Lang.Get("autosort:cfg-groups-hint"));
+
+        for (int g = 0; g < _groups.Count; g++)
+        {
+            var group = _groups[g];
+            ImGui.Text($"{Lang.Get("autosort:cfg-group")} {g + 1}");
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"{Lang.Get("autosort:cfg-group-remove")}##{id}grm{g}"))
+            {
+                _groups.RemoveAt(g);
+                g--;
+                continue;
+            }
+
+            for (int m = 0; m < group.Count; m++)
+            {
+                ImGui.BulletText(group[m]);
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"x##{id}gx{g}_{m}")) { group.RemoveAt(m); m--; }
+            }
+
+            // Offer only kinds not already assigned to some group (a kind belongs to one group).
+            var assigned = _groups.SelectMany(x => x).ToHashSet(System.StringComparer.OrdinalIgnoreCase);
+            var addable = cfg.DiscoveredKinds.Where(k => !assigned.Contains(k)).ToArray();
+            if (addable.Length > 0)
+            {
+                int sel = _groupAddSel.GetValueOrDefault(g);
+                if (sel >= addable.Length) sel = 0;
+                ImGui.SetNextItemWidth(180f);
+                ImGui.Combo($"##{id}gadd{g}", ref sel, addable, addable.Length);
+                _groupAddSel[g] = sel;
+                ImGui.SameLine();
+                if (ImGui.Button($"{Lang.Get("autosort:cfg-add")}##{id}gaddb{g}"))
+                    group.Add(addable[sel]);
+            }
+            ImGui.Separator();
+        }
+        if (ImGui.Button($"{Lang.Get("autosort:cfg-group-new")}##{id}gnew"))
+            _groups.Add(new System.Collections.Generic.List<string>());
+
         if (!cfg.IsAdmin) { ImGui.EndDisabled(); return; }
 
         // Admin save.
@@ -151,6 +205,11 @@ public static class ConfigLibIntegration
                 MaxVerticalSpan = _maxVSpan,
                 SpecialisationThreshold = _threshold,
                 EnabledKinds = _enabledKinds.ToArray(),
+                ContainerGroups = _groups
+                    .Select(gr => string.Join(",", gr.Where(s => !string.IsNullOrWhiteSpace(s))
+                                                     .Distinct(System.StringComparer.OrdinalIgnoreCase)))
+                    .Where(s => s.Length > 0)
+                    .ToArray(),
             });
         }
     }

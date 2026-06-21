@@ -113,10 +113,19 @@ public class SortConfig
     {
         if (IgnoredContainerCodes.Count == 0)
             IgnoredContainerCodes.Add("collapsed");
+        // Inventory-class substrings (matched against IInventory.ClassName). Wooden trunks
+        // report class "trunk" — BlockGenericTypedContainerTrunk overrides the JSON's
+        // inventoryClassName ("chest") — so "trunk" must be listed separately from "chest"
+        // or trunks are never recognised.
         if (SupportedInventoryClasses.Count == 0)
-            SupportedInventoryClasses.AddRange(["chest", "crate", "storagevessel"]);
+            SupportedInventoryClasses.AddRange(["chest", "basket", "storagevessel", "crate", "trunk"]);
+        // Container groups are matched against the BLOCK kind (code segment before the first
+        // '-'). Items only sort/distribute within a group; a kind ALONE in its group still
+        // sorts its own contents on close (the triggering container is always sorted first).
+        // Each common kind gets a default group; edit ContainerGroups to combine kinds into
+        // one shared network.
         if (ContainerGroups.Count == 0)
-            ContainerGroups.AddRange([["chest", "crate"], ["storagevessel"]]);
+            ContainerGroups.AddRange([["chest", "basket", "crate"], ["storagevessel"], ["trunk"]]);
         if (CrateInventoryClasses.Count == 0)
             CrateInventoryClasses.Add("crate");
     }
