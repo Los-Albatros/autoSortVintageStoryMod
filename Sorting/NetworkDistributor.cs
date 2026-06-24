@@ -359,6 +359,65 @@ public static class NetworkDistributor
         => ComputeValenceLayout(pooled, chestSlotCounts, System.Array.Empty<Dictionary<string, int>>());
 
     /// <summary>
+    /// Crate-aware room layout. Crates hold only one item TYPE at a time, so they can't take
+    /// part in the family-spread valence layout. This wraps <see cref="ComputeValenceLayout"/>:
+    ///
+    ///  • Phase A (crates): each non-empty crate (a position with a non-null locked type) pulls
+    ///    every pooled stack of that exact identity, compacts them, and fills up to its slot
+    ///    count — vacuuming matching items out of chests ("prefer crate"). Overflow returns to
+    ///    the pool. A different type never enters a crate (single-type, sticky).
+    ///  • Phase B (chests): every crate slot is zeroed out so the valence layout writes only to
+    ///    chests; the remaining pool is laid out across them as before.
+    ///
+    /// Empty crates (a crate position with a null locked type) receive nothing — the player
+    /// assigns a crate's purpose by placing its first item. Deterministic, hence idempotent.
+    /// </summary>
+    public static List<List<StackEntry>> ComputeRoomLayout(
+        IReadOnlyList<StackEntry> pooled,
+        IReadOnlyList<int> slotCounts,
+        IReadOnlyList<bool> isCrate,
+        IReadOnlyList<StackIdentity?> crateLockedTypes,
+        IReadOnlyList<Dictionary<string, int>> existingFamilyCounts)
+    {
+        int n = slotCounts.Count;
+        var result = new List<List<StackEntry>>(n);
+        for (int i = 0; i < n; i++) result.Add(new());
+        if (n == 0) return result;
+
+        // Phase A: fill each non-empty crate with its own locked type, pulled from the pool.
+        var remaining = new List<StackEntry>(pooled);
+        for (int i = 0; i < n; i++)
+        {
+            var locked = i < crateLockedTypes.Count ? crateLockedTypes[i] : null;
+            if (locked == null) continue;
+
+            var matched = remaining.Where(e => e.Identity.Equals(locked)).ToList();
+            if (matched.Count == 0) continue;
+            remaining.RemoveAll(e => e.Identity.Equals(locked));
+
+            var compacted = InventorySorter.SortItems(matched);
+            int take = Math.Min(slotCounts[i], compacted.Count);
+            result[i].AddRange(compacted.Take(take));
+            if (compacted.Count > take)
+                remaining.AddRange(compacted.Skip(take));
+        }
+
+        // Phase B: lay the rest out across chests only — every crate slot is masked to 0 so the
+        // valence layout can never write a (second) type into a crate.
+        var chestSlots = slotCounts.ToArray();
+        for (int i = 0; i < n; i++)
+            if (i < isCrate.Count && isCrate[i])
+                chestSlots[i] = 0;
+
+        var chestLayout = ComputeValenceLayout(remaining, chestSlots, existingFamilyCounts);
+        for (int i = 0; i < n; i++)
+            if (!(i < isCrate.Count && isCrate[i]))
+                result[i] = chestLayout[i];
+
+        return result;
+    }
+
+    /// <summary>
     /// Pools every container in the network (clearing them), computes the target layout —
     /// dense compaction or the spread "valence" layout depending on
     /// <see cref="SortConfig.CompactRoom"/> — and writes the items back, chests ordered
@@ -383,17 +442,24 @@ public static class NetworkDistributor
         if (invs.Count == 0) return;
 
         // Pool every stack (clearing slots), keeping frozen clones keyed by stack identity.
+        // For crates also record whether the container is a crate and the single type it is
+        // locked to (the identity of its first non-empty slot, captured before clearing).
         var pooled = new List<StackEntry>();
         var existingFamilyCounts = new List<Dictionary<string, int>>(invs.Count);
+        var isCrate = new List<bool>(invs.Count);
+        var crateLockedTypes = new List<StackIdentity?>(invs.Count);
         var clonePool = new Dictionary<StackIdentity, Queue<ItemStack>>();
         int order = 0;
         foreach (var inv in invs)
         {
+            bool crate = IsCrate(inv, cfg);
+            StackIdentity? locked = null;
             var familyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var slot in inv)
             {
                 if (slot.Itemstack == null) continue;
                 var identity = new StackIdentity(slot.Itemstack);
+                if (crate) locked ??= identity;
                 pooled.Add(new StackEntry(identity, slot.Itemstack.StackSize, order++));
                 var familyKey = ItemClassifier.BaseName(identity.Code);
                 familyCounts[familyKey] = familyCounts.GetValueOrDefault(familyKey) + slot.Itemstack.StackSize;
@@ -405,12 +471,14 @@ public static class NetworkDistributor
                 slot.MarkDirty();
             }
             existingFamilyCounts.Add(familyCounts);
+            isCrate.Add(crate);
+            crateLockedTypes.Add(locked);
         }
 
         var slotCounts = invs.Select(i => i.Count).ToList();
         var layout = cfg.CompactRoom
             ? ComputeCompactLayout(pooled, slotCounts)
-            : ComputeValenceLayout(pooled, slotCounts, existingFamilyCounts);
+            : ComputeRoomLayout(pooled, slotCounts, isCrate, crateLockedTypes, existingFamilyCounts);
 
         for (int c = 0; c < invs.Count; c++)
         {
@@ -454,16 +522,23 @@ public static class NetworkDistributor
         if (block?.Code == null) return false;
 
         var path = block.Code.Path;
-        if (cfg.IgnoredContainerCodes.Any(ig => path.Contains(ig, StringComparison.OrdinalIgnoreCase)))
-            return true;
+        // Typed containers (e.g. the wooden trunk) carry their subtype in a block-entity field,
+        // not the block code: a collapsed trunk stays "trunk-east" but reports type "collapsed1".
+        var type = TypedContainerType(api.World.BlockAccessor.GetBlockEntity(pos));
+
+        if (cfg.IsIgnoredCode(path, type)) return true;
 
         try
         {
             var ro = block.Attributes?["retrieveOnly"];
             if (ro != null && ro.Exists)
             {
-                if (ro.AsBool(false)) return true;
-                var s = ro.AsString(null);
+                // retrieveOnly may be a plain bool, or a by-type map (key = container type) as on
+                // the trunk: { "normal-generic": false, "collapsed1": true, ... }. Resolve the
+                // type's entry first, falling back to the node itself for plain-bool blocks.
+                var roVal = (type != null && ro[type] is { Exists: true } byType) ? byType : ro;
+                if (roVal.AsBool(false)) return true;
+                var s = roVal.AsString(null);
                 if (s != null && (s.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
                                   s.Equals("true", StringComparison.OrdinalIgnoreCase)))
                     return true;
@@ -473,6 +548,13 @@ public static class NetworkDistributor
 
         return false;
     }
+
+    /// <summary>
+    /// The subtype string of a typed container block entity (e.g. "normal-generic" /
+    /// "collapsed1" for a trunk), or null for containers that have no typed variant.
+    /// </summary>
+    private static string? TypedContainerType(BlockEntity? be)
+        => be is Vintagestory.GameContent.BlockEntityGenericTypedContainer c ? c.type : null;
 
     /// <summary>
     /// True if <paramref name="pos"/> is on the same storey as <paramref name="origin"/>:
@@ -715,6 +797,14 @@ public static class NetworkDistributor
 
         return null;
     }
+
+    /// <summary>
+    /// True if the inventory belongs to a crate — a container that holds only one item type
+    /// at a time (matched against <see cref="SortConfig.CrateInventoryClasses"/>).
+    /// </summary>
+    private static bool IsCrate(IInventory inv, SortConfig cfg)
+        => cfg.CrateInventoryClasses.Any(c =>
+            inv.ClassName.Contains(c, StringComparison.OrdinalIgnoreCase));
 
     private static int ApplyTransfer(TransferPlan plan, IInventory src, IInventory tgt)
     {

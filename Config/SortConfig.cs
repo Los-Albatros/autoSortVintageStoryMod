@@ -34,7 +34,7 @@ public class SortConfig
     /// written) — e.g. collapsed / ruined trunks that don't allow the player to place
     /// items. Prevents items from being pushed into them.
     /// </summary>
-    public List<string> IgnoredContainerCodes { get; set; } = ["collapsed"];
+    public List<string> IgnoredContainerCodes { get; set; } = [];
 
     /// <summary>
     /// Euclidean radius (in blocks) of each chest's neighbourhood. The network grows
@@ -88,22 +88,59 @@ public class SortConfig
     /// Inventory class names that qualify as supported containers.
     /// Checked against IInventory.ClassName.
     /// </summary>
-    public List<string> SupportedInventoryClasses { get; set; } =
-    [
-        "chest",
-        "largecrate",
-        "storagevessel"
-    ];
+    public List<string> SupportedInventoryClasses { get; set; } = [];
 
     /// <summary>
     /// Container groups. Distribution stays within a group — jars never mix with chests.
     /// Each inner list is a set of ClassName substrings that belong to the same group.
     /// </summary>
-    public List<List<string>> ContainerGroups { get; set; } =
-    [
-        ["chest", "largecrate"],
-        ["storagevessel"]
-    ];
+    public List<List<string>> ContainerGroups { get; set; } = [];
+
+    /// <summary>
+    /// Inventory-class substrings that identify CRATES — containers that hold only one item
+    /// type at a time. Crates are sorted in the same room network as chests, but each crate
+    /// keeps a single type (sticky) and matching items are pulled into it from chests.
+    /// "crate" covers both vanilla "crate" and modded "largecrate".
+    /// </summary>
+    public List<string> CrateInventoryClasses { get; set; } = [];
+
+    /// <summary>
+    /// Fills in factory defaults for any list that is empty after deserialization.
+    /// Prevents Newtonsoft.Json's append-to-initialized-list behavior from
+    /// duplicating entries across config reloads.
+    /// </summary>
+    public void EnsureDefaults()
+    {
+        if (IgnoredContainerCodes.Count == 0)
+            IgnoredContainerCodes.Add("collapsed");
+        // Inventory-class substrings (matched against IInventory.ClassName). Wooden trunks
+        // report class "trunk" — BlockGenericTypedContainerTrunk overrides the JSON's
+        // inventoryClassName ("chest") — so "trunk" must be listed separately from "chest"
+        // or trunks are never recognised.
+        if (SupportedInventoryClasses.Count == 0)
+            SupportedInventoryClasses.AddRange(["chest", "basket", "storagevessel", "crate", "trunk"]);
+        // Container groups are matched against the BLOCK kind (code segment before the first
+        // '-'). Items only sort/distribute within a group; a kind ALONE in its group still
+        // sorts its own contents on close (the triggering container is always sorted first).
+        // Each common kind gets a default group; edit ContainerGroups to combine kinds into
+        // one shared network.
+        if (ContainerGroups.Count == 0)
+            ContainerGroups.AddRange([["chest", "basket", "crate"], ["storagevessel"], ["trunk"]]);
+        if (CrateInventoryClasses.Count == 0)
+            CrateInventoryClasses.Add("crate");
+    }
+
+    /// <summary>
+    /// True if a container must be left untouched because its block code path OR its typed
+    /// variant matches one of <see cref="IgnoredContainerCodes"/>. The typed variant matters
+    /// for containers whose subtype lives in a block-entity attribute rather than the code:
+    /// a collapsed wooden trunk keeps block code "trunk-east" but reports type "collapsed1",
+    /// so matching only the code path would never exclude it.
+    /// </summary>
+    public bool IsIgnoredCode(string blockCodePath, string? containerType)
+        => IgnoredContainerCodes.Any(ig =>
+            (blockCodePath != null && blockCodePath.Contains(ig, System.StringComparison.OrdinalIgnoreCase)) ||
+            (containerType != null && containerType.Contains(ig, System.StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>
     /// Returns the group class list that contains <paramref name="className"/>,

@@ -28,6 +28,12 @@ public class ConfigSyncPacket
 
     /// <summary>All container kinds discovered on the server (vanilla + mods).</summary>
     [ProtoMember(13)] public string[] DiscoveredKinds { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>
+    /// Container groups (ContainerGroups). Each string is one group: its member kinds
+    /// joined by ','. Items only ever sort/distribute within a single group.
+    /// </summary>
+    [ProtoMember(14)] public string[] ContainerGroups { get; set; } = System.Array.Empty<string>();
 }
 
 /// <summary>
@@ -52,4 +58,7 @@ public class ConfigChangePacket
     [ProtoMember(11)] public double SpecialisationThreshold { get; set; }
 
     [ProtoMember(12)] public string[] EnabledKinds { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>Container groups, each a ','-joined list of member kinds. See <see cref="ConfigSyncPacket.ContainerGroups"/>.</summary>
+    [ProtoMember(14)] public string[] ContainerGroups { get; set; } = System.Array.Empty<string>();
 }

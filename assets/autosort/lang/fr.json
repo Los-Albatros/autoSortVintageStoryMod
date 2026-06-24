@@ -18,5 +18,10 @@
     "autosort:cfg-vspan": "Écart vertical max (0 = off)",
     "autosort:cfg-threshold": "Seuil de spécialisation",
     "autosort:cfg-containers": "Types de conteneurs triés",
-    "autosort:cfg-add": "Ajouter"
+    "autosort:cfg-add": "Ajouter",
+    "autosort:cfg-groups": "Groupes de conteneurs",
+    "autosort:cfg-groups-hint": "Les objets ne sont triés qu'au sein de leur groupe. Un type doit aussi figurer dans la liste ci-dessus pour être trié.",
+    "autosort:cfg-group": "Groupe",
+    "autosort:cfg-group-remove": "supprimer le groupe",
+    "autosort:cfg-group-new": "+ Nouveau groupe"
 }

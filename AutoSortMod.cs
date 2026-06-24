@@ -144,6 +144,7 @@ public class AutoSortMod : ModSystem
             SpecialisationThreshold = c.SpecialisationThreshold,
             EnabledKinds = c.SupportedInventoryClasses.ToArray(),
             DiscoveredKinds = ContainerDiscovery.Discover(_api),
+            ContainerGroups = ContainerGroupCodec.Encode(c.ContainerGroups),
         }, player);
     }
 
@@ -172,8 +173,14 @@ public class AutoSortMod : ModSystem
                 c.SupportedInventoryClasses = p.EnabledKinds
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .Distinct(System.StringComparer.OrdinalIgnoreCase).ToList();
+            if (p.ContainerGroups is { Length: > 0 })
+                c.ContainerGroups = ContainerGroupCodec.Decode(p.ContainerGroups);
             _cfg.Save();
             _api.Logger.Notification($"[AutoSort] Config updated by {player.PlayerName}.");
+
+            if (c.SortPlayerBackpack)
+                foreach (var p2 in _api.World.AllOnlinePlayers.OfType<IServerPlayer>())
+                    HookBackpack(p2);
         }
 
         SendConfigSync(player);
@@ -213,20 +220,35 @@ public class AutoSortMod : ModSystem
 
         try
         {
+            var ba = _api.World.BlockAccessor;
             var pos = blockSel.Position;
-            var be = _api.World.BlockAccessor.GetBlockEntity(pos);
+
+            // Large containers (wooden trunk) span two cells; only the principal holds the
+            // block entity. Resolve a filler click to the principal. The offset in the filler
+            // block code is principal→filler, so negate it to get filler→principal. Try the
+            // negative direction first, positive as fallback. Require a supported inventory
+            // class so an adjacent unrelated container doesn't steal the resolution.
+            if (ba.GetBlockEntity(pos) is not IBlockEntityContainer &&
+                MultiblockResolver.TryParseFillerOffset(ba.GetBlock(pos)?.Code?.Path, out int dx, out int dy, out int dz))
+            {
+                foreach (var cand in new[] { pos.AddCopy(-dx, -dy, -dz), pos.AddCopy(dx, dy, dz) })
+                {
+                    var candInv = (ba.GetBlockEntity(cand) as IBlockEntityContainer)?.Inventory;
+                    if (candInv != null && _cfg.Data.SupportedInventoryClasses.Any(cls =>
+                            candInv.ClassName.Contains(cls, StringComparison.OrdinalIgnoreCase)))
+                    { pos = cand; break; }
+                }
+            }
+            var be = ba.GetBlockEntity(pos);
             if (be is not IBlockEntityContainer container) return;
 
             var inv = container.Inventory;
             if (inv == null) return;
 
-            // Filter to supported inventory classes
             if (!_cfg.Data.SupportedInventoryClasses.Any(cls =>
-                inv.ClassName.Contains(cls, StringComparison.OrdinalIgnoreCase)))
+                    inv.ClassName.Contains(cls, StringComparison.OrdinalIgnoreCase)))
                 return;
 
-            // All block-entity inventories in VS extend InventoryBase, which exposes
-            // the OnInventoryClosed event and the Pos field.
             if (inv is InventoryBase invBase)
                 SubscribeToInventory(invBase, pos);
         }
