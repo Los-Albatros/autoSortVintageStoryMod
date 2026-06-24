@@ -84,7 +84,7 @@ The overlay is per-player and persists across reconnects and server restarts.
 
 ## Installation
 
-Download `autosort_0.1.3.zip` and drop it in the Vintage Story `Mods/` folder.
+Download `autosort_0.1.4.zip` and drop it in the Vintage Story `Mods/` folder.
 
 - **Server: required.** Installing the mod on the server enables the sorting for
   **everyone**, including players who don't have the mod. A config file `autosort.json`
