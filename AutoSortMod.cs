@@ -245,11 +245,10 @@ public class AutoSortMod : ModSystem
             var inv = container.Inventory;
             if (inv == null) return;
 
-            // Don't filter by ClassName here: VS trunks initialise their inventory's
-            // ClassName lazily on first open from the principal cell, so clicking the
-            // filler half first would see an empty ClassName and skip hooking.
-            // GetInventory() inside DistributeCascade re-checks ClassName at sort time
-            // when it is guaranteed to be populated, so filtering here is redundant.
+            if (!_cfg.Data.SupportedInventoryClasses.Any(cls =>
+                    inv.ClassName.Contains(cls, StringComparison.OrdinalIgnoreCase)))
+                return;
+
             if (inv is InventoryBase invBase)
                 SubscribeToInventory(invBase, pos);
         }
